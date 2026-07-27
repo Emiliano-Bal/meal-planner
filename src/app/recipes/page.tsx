@@ -155,7 +155,7 @@ export default function RecipesPage() {
           ← Back to my recipes
         </button>
         <div className="bg-white rounded-2xl border border-stone-100 overflow-hidden">
-          <div className="w-full h-48 bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center">
+          <div className="w-full h-48 bg-gradient-to-br from-stone-100 to-stone-50 flex items-center justify-center">
             <span className="text-6xl">{customDetail.is_healthy ? '🥦' : '🍽️'}</span>
           </div>
           <div className="p-6">
@@ -178,12 +178,12 @@ export default function RecipesPage() {
             </div>
             <div className="flex flex-wrap gap-2 mb-5">
               {customDetail.category && (
-                <span className="text-xs bg-green-50 text-green-700 px-2.5 py-1 rounded-full font-medium">
+                <span className="text-xs bg-stone-100 text-stone-700 px-2.5 py-1 rounded-full font-medium">
                   {customDetail.category}
                 </span>
               )}
               {customDetail.is_healthy && (
-                <span className="text-xs bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full font-medium">
+                <span className="text-xs bg-stone-100 text-stone-600 px-2.5 py-1 rounded-full font-medium">
                   🌿 Healthy
                 </span>
               )}
@@ -195,7 +195,7 @@ export default function RecipesPage() {
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold text-stone-700">Ingredients</h2>
               {scale !== 1 && (
-                <span className="text-xs text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-full">
+                <span className="text-xs text-stone-700 font-medium bg-stone-100 px-2 py-0.5 rounded-full">
                   Scaled for {householdSize} people
                 </span>
               )}
@@ -241,7 +241,7 @@ export default function RecipesPage() {
               <h1 className="text-xl font-semibold text-stone-800 mb-1">{detail.name}</h1>
               <div className="flex gap-2 mb-5">
                 {detail.category && (
-                  <span className="text-xs bg-green-50 text-green-700 px-2.5 py-1 rounded-full font-medium">
+                  <span className="text-xs bg-stone-100 text-stone-700 px-2.5 py-1 rounded-full font-medium">
                     {detail.category}
                   </span>
                 )}
@@ -255,7 +255,7 @@ export default function RecipesPage() {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-semibold text-stone-700">Ingredients</h2>
                 {scale !== 1 && (
-                  <span className="text-xs text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-full">
+                  <span className="text-xs text-stone-700 font-medium bg-stone-100 px-2 py-0.5 rounded-full">
                     Scaled for {householdSize} people
                   </span>
                 )}
@@ -283,10 +283,10 @@ export default function RecipesPage() {
                         <button
                           key={alt.id}
                           onClick={() => { setDetail(null); setCustomDetail(alt) }}
-                          className="w-full text-left px-4 py-3 rounded-xl border border-green-100 bg-green-50 hover:border-green-300 hover:bg-green-100 transition-colors"
+                          className="w-full text-left px-4 py-3 rounded-xl border border-stone-100 bg-stone-50 hover:border-stone-200 hover:bg-stone-100 transition-colors"
                         >
-                          <p className="text-sm font-medium text-green-800">{alt.name}</p>
-                          <p className="text-xs text-green-600 mt-0.5">Serves {alt.servings} · {alt.category ?? 'Custom'}</p>
+                          <p className="text-sm font-medium text-stone-800">{alt.name}</p>
+                          <p className="text-xs text-stone-700 mt-0.5">Serves {alt.servings} · {alt.category ?? 'Custom'}</p>
                         </button>
                       ))}
                     </div>
@@ -295,7 +295,7 @@ export default function RecipesPage() {
                 <button
                   onClick={() => openCreateHealthy(detail)}
                   disabled={generatingHealthy}
-                  className="w-full py-2.5 rounded-xl border border-dashed border-green-300 text-green-600 text-sm font-medium hover:bg-green-50 disabled:opacity-60 transition-colors flex items-center justify-center gap-1.5"
+                  className="w-full py-2.5 rounded-xl border border-dashed border-stone-200 text-stone-700 text-sm font-medium hover:bg-stone-50 disabled:opacity-60 transition-colors flex items-center justify-center gap-1.5"
                 >
                   {generatingHealthy ? (
                     <><span className="animate-spin inline-block">⏳</span> Generating healthy version...</>
@@ -333,7 +333,7 @@ export default function RecipesPage() {
         {tab === 'mine' && (
           <button
             onClick={() => { setAddModalPrefill(undefined); setShowAddModal(true) }}
-            className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-medium transition-colors"
+            className="flex items-center gap-1.5 px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-sm font-medium transition-colors"
           >
             + Add Recipe
           </button>
@@ -367,11 +367,11 @@ export default function RecipesPage() {
                 onChange={e => setQuery(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && search(query)}
                 placeholder="Search any recipe..."
-                className="flex-1 px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                className="flex-1 px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent"
               />
               <button
                 onClick={() => search(query)}
-                className="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-medium transition-colors"
+                className="px-4 py-2.5 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-sm font-medium transition-colors"
               >
                 Search
               </button>
@@ -382,7 +382,7 @@ export default function RecipesPage() {
                 <button
                   key={p.label}
                   onClick={() => p.cat ? browseCategory(p.cat) : (p.q && (setQuery(p.q), search(p.q)))}
-                  className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full font-medium bg-stone-50 text-stone-600 border border-stone-200 hover:border-green-400 hover:text-green-700 hover:bg-green-50 transition-colors"
+                  className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full font-medium bg-stone-50 text-stone-600 border border-stone-200 hover:border-stone-400 hover:text-stone-700 hover:bg-stone-50 transition-colors"
                 >
                   {p.label}
                 </button>
@@ -394,7 +394,7 @@ export default function RecipesPage() {
                 <button
                   key={cat}
                   onClick={() => browseCategory(cat)}
-                  className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${activeCategory === cat ? 'bg-green-600 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}
+                  className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${activeCategory === cat ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}
                 >
                   {cat}
                 </button>
@@ -412,7 +412,7 @@ export default function RecipesPage() {
                 <button
                   key={recipe.id}
                   onClick={() => openDetail(recipe)}
-                  className="text-left rounded-2xl overflow-hidden border border-stone-100 bg-white hover:border-green-200 hover:shadow-md transition-all group"
+                  className="text-left rounded-2xl overflow-hidden border border-stone-100 bg-white hover:border-stone-200 hover:shadow-md transition-all group"
                 >
                   <img
                     src={recipe.thumbnail}
@@ -434,7 +434,7 @@ export default function RecipesPage() {
           <div className="flex items-center gap-3 mb-5">
             <button
               onClick={() => setHealthyFilter(h => !h)}
-              className={`flex items-center gap-1.5 text-sm px-4 py-2 rounded-xl font-medium transition-colors ${healthyFilter ? 'bg-green-600 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}
+              className={`flex items-center gap-1.5 text-sm px-4 py-2 rounded-xl font-medium transition-colors ${healthyFilter ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}
             >
               🌿 Healthy only
             </button>
@@ -454,7 +454,7 @@ export default function RecipesPage() {
               {!healthyFilter && (
                 <button
                   onClick={() => { setAddModalPrefill(undefined); setShowAddModal(true) }}
-                  className="text-sm text-green-600 hover:text-green-700 font-medium"
+                  className="text-sm text-stone-700 hover:text-stone-700 font-medium"
                 >
                   Add your first recipe →
                 </button>
@@ -466,9 +466,9 @@ export default function RecipesPage() {
                 <button
                   key={recipe.id}
                   onClick={() => setCustomDetail(recipe)}
-                  className="text-left rounded-2xl overflow-hidden border border-stone-100 bg-white hover:border-green-200 hover:shadow-md transition-all"
+                  className="text-left rounded-2xl overflow-hidden border border-stone-100 bg-white hover:border-stone-200 hover:shadow-md transition-all"
                 >
-                  <div className="w-full h-36 bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center">
+                  <div className="w-full h-36 bg-gradient-to-br from-stone-100 to-stone-50 flex items-center justify-center">
                     <span className="text-4xl">{recipe.is_healthy ? '🥦' : '🍽️'}</span>
                   </div>
                   <div className="p-3">
@@ -476,7 +476,7 @@ export default function RecipesPage() {
                       <p className="text-sm font-medium text-stone-700 leading-snug line-clamp-2 flex-1">
                         {recipe.name}
                       </p>
-                      {recipe.is_healthy && <span className="text-green-500 text-sm flex-shrink-0">🌿</span>}
+                      {recipe.is_healthy && <span className="text-stone-500 text-sm flex-shrink-0">🌿</span>}
                     </div>
                     <div className="flex items-center gap-1.5">
                       {recipe.category && <p className="text-xs text-stone-400">{recipe.category}</p>}

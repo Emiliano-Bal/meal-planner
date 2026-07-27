@@ -2,20 +2,26 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase'
-import { scaleQuantity } from '@/lib/utils'
+import { scaleQuantity, normalizeIngKey, sumQuantities } from '@/lib/utils'
+import { translateIngredients } from '@/app/actions/ai'
 import { Menu, Meal, RecipeData, MealType } from '@/types'
 import RecipePickerModal from '@/components/RecipePickerModal'
 import QuickIngredientModal from '@/components/QuickIngredientModal'
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner']
-const MEAL_ICONS: Record<MealType, string> = { breakfast: '🌅', lunch: '☀️', dinner: '🌙' }
+
+const MEAL_LABEL: Record<MealType, string> = {
+  breakfast: 'Morning',
+  lunch: 'Midday',
+  dinner: 'Evening',
+}
 
 const LUNCH_SECTIONS = [
-  { key: 'main', label: 'Main', icon: '🍖' },
-  { key: 'side', label: 'Side', icon: '🥣' },
-  { key: 'veggies', label: 'Veggies', icon: '🥦' },
-  { key: 'grain', label: 'Grain', icon: '🍚' },
+  { key: 'main',    label: 'Main'   },
+  { key: 'side',    label: 'Side'   },
+  { key: 'veggies', label: 'Veg'    },
+  { key: 'grain',   label: 'Grain'  },
 ]
 
 function getMonday(date: Date): Date {
@@ -30,7 +36,7 @@ function getMonday(date: Date): Date {
 function formatWeekLabel(monday: Date): string {
   const end = new Date(monday)
   end.setDate(monday.getDate() + 6)
-  return `${monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+  return `${monday.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })} – ${end.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`
 }
 
 export default function DashboardPage() {
@@ -45,6 +51,13 @@ export default function DashboardPage() {
   const [householdSize, setHouseholdSize] = useState(4)
 
   const weekStart = currentMonday.toISOString().split('T')[0]
+
+  const todayIndex = (() => {
+    const todayWeekStart = getMonday(new Date()).toISOString().split('T')[0]
+    if (weekStart !== todayWeekStart) return -1
+    const d = new Date().getDay()
+    return d === 0 ? 6 : d - 1
+  })()
 
   useEffect(() => {
     const cached = localStorage.getItem('household_size')
@@ -61,28 +74,20 @@ export default function DashboardPage() {
       if (!user) { setLoading(false); return }
 
       let { data: menuData } = await supabase
-        .from('menus')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('week_start', weekStart)
-        .single()
+        .from('menus').select('*')
+        .eq('user_id', user.id).eq('week_start', weekStart).single()
 
       if (!menuData) {
         const { data: created } = await supabase
-          .from('menus')
-          .insert({ user_id: user.id, week_start: weekStart })
-          .select()
-          .single()
+          .from('menus').insert({ user_id: user.id, week_start: weekStart })
+          .select().single()
         menuData = created
       }
 
       setMenu(menuData)
-
       if (menuData) {
         const { data: mealsData } = await supabase
-          .from('meals')
-          .select('*')
-          .eq('menu_id', menuData.id)
+          .from('meals').select('*').eq('menu_id', menuData.id)
         setMeals(mealsData ?? [])
       }
     } finally {
@@ -90,38 +95,26 @@ export default function DashboardPage() {
     }
   }, [weekStart, supabase])
 
-  useEffect(() => {
-    loadMenu()
-  }, [loadMenu])
+  useEffect(() => { loadMenu() }, [loadMenu])
 
   async function assignRecipe(dayIndex: number, mealType: MealType, section: string, recipe: RecipeData) {
     if (!menu) return
-    const existing = meals.find(m => m.day_of_week === dayIndex && m.meal_type === mealType && (m.section ?? 'main') === section)
-
+    const existing = meals.find(m =>
+      m.day_of_week === dayIndex && m.meal_type === mealType && (m.section ?? 'main') === section
+    )
     if (existing) {
-      await supabase.from('meals').update({
-        meal_name: recipe.name,
-        recipe_id: recipe.id,
-        recipe_data: recipe,
-      }).eq('id', existing.id)
+      await supabase.from('meals').update({ meal_name: recipe.name, recipe_id: recipe.id, recipe_data: recipe }).eq('id', existing.id)
     } else {
-      await supabase.from('meals').insert({
-        menu_id: menu.id,
-        day_of_week: dayIndex,
-        meal_type: mealType,
-        section,
-        meal_name: recipe.name,
-        recipe_id: recipe.id,
-        recipe_data: recipe,
-      })
+      await supabase.from('meals').insert({ menu_id: menu.id, day_of_week: dayIndex, meal_type: mealType, section, meal_name: recipe.name, recipe_id: recipe.id, recipe_data: recipe })
     }
-
     await loadMenu()
     setPickerState(null)
   }
 
   async function clearMeal(dayIndex: number, mealType: MealType, section: string) {
-    const existing = meals.find(m => m.day_of_week === dayIndex && m.meal_type === mealType && (m.section ?? 'main') === section)
+    const existing = meals.find(m =>
+      m.day_of_week === dayIndex && m.meal_type === mealType && (m.section ?? 'main') === section
+    )
     if (!existing) return
     await supabase.from('meals').delete().eq('id', existing.id)
     setMeals(prev => prev.filter(m => m.id !== existing.id))
@@ -130,37 +123,39 @@ export default function DashboardPage() {
   async function generateShoppingList() {
     if (!menu) return
     setGeneratingList(true)
-
     await supabase.from('shopping_items').delete().eq('menu_id', menu.id)
 
-    // Deduplicate: combine quantities for the same ingredient name
-    const map = new Map<string, { name: string; quantities: string[] }>()
+    // Collect raw ingredients from all meals
+    const raw: { name: string; quantity: string }[] = []
     for (const meal of meals) {
       if (meal.recipe_data?.ingredients) {
         const servings = meal.recipe_data.servings ?? 4
         const scale = householdSize / servings
         for (const ing of meal.recipe_data.ingredients) {
-          const key = ing.name.toLowerCase().trim()
-          const quantity = scale !== 1 ? scaleQuantity(ing.measure, scale) : ing.measure
-          if (map.has(key)) {
-            map.get(key)!.quantities.push(quantity)
-          } else {
-            map.set(key, { name: ing.name, quantities: [quantity] })
-          }
+          raw.push({
+            name: ing.name,
+            quantity: scale !== 1 ? scaleQuantity(ing.measure, scale) : ing.measure,
+          })
         }
       }
     }
 
-    const items = Array.from(map.values()).map(({ name, quantities }) => ({
-      menu_id: menu!.id,
-      ingredient: name,
-      quantity: quantities.join(' + '),
-    }))
+    // Translate all names to English in one call, then deduplicate
+    const names = raw.map(r => r.name)
+    const translated = await translateIngredients(names)
 
-    if (items.length > 0) {
-      await supabase.from('shopping_items').insert(items)
+    const map = new Map<string, { name: string; quantities: string[] }>()
+    for (let i = 0; i < raw.length; i++) {
+      const name = translated[i] ?? raw[i].name
+      const key = normalizeIngKey(name)
+      if (map.has(key)) map.get(key)!.quantities.push(raw[i].quantity)
+      else map.set(key, { name, quantities: [raw[i].quantity] })
     }
 
+    const items = Array.from(map.values()).map(({ name, quantities }) => ({
+      menu_id: menu!.id, ingredient: name, quantity: sumQuantities(quantities),
+    }))
+    if (items.length > 0) await supabase.from('shopping_items').insert(items)
     setGeneratingList(false)
     window.location.href = '/shopping'
   }
@@ -173,121 +168,158 @@ export default function DashboardPage() {
     })
   }
 
-  const hasMeals = meals.length > 0
-
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      {/* ── Header ── */}
+      <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-stone-800">Weekly Menu</h1>
-          <p className="text-sm text-stone-500 mt-0.5">{formatWeekLabel(currentMonday)}</p>
+          <h1 className="text-xl font-bold text-stone-900 tracking-tight">Weekly menu</h1>
+          <p className="text-xs text-stone-400 mt-1">{formatWeekLabel(currentMonday)}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => navigate(-1)} className="p-2 rounded-lg hover:bg-stone-100 text-stone-500 hover:text-stone-800 transition-colors">←</button>
-          <button onClick={() => setCurrentMonday(getMonday(new Date()))} className="px-3 py-1.5 text-xs font-medium rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-600 transition-colors">Today</button>
-          <button onClick={() => navigate(1)} className="p-2 rounded-lg hover:bg-stone-100 text-stone-500 hover:text-stone-800 transition-colors">→</button>
+        <div className="flex items-center gap-1">
+          <button onClick={() => navigate(-1)} className="w-8 h-8 flex items-center justify-center rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors text-lg">‹</button>
+          <button onClick={() => setCurrentMonday(getMonday(new Date()))} className="px-3 py-1.5 text-xs font-semibold rounded-lg text-stone-500 hover:bg-stone-100 hover:text-stone-800 transition-colors">Today</button>
+          <button onClick={() => navigate(1)} className="w-8 h-8 flex items-center justify-center rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors text-lg">›</button>
         </div>
       </div>
 
       {loading ? (
-        <div className="text-center py-20 text-stone-400 text-sm">Loading...</div>
+        <div className="flex flex-col items-center justify-center py-24 gap-3">
+          <div className="w-6 h-6 rounded-full border-2 border-stone-200 border-t-stone-600 animate-spin" />
+          <p className="text-xs text-stone-400">Loading…</p>
+        </div>
       ) : (
         <>
-          {/* Day grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 mb-6">
-            {DAYS.map((day, i) => (
-              <div key={day} className="bg-white rounded-2xl border border-stone-100 p-3 flex flex-col gap-2">
-                <div className="text-xs font-semibold text-stone-400 uppercase tracking-wide">
-                  {day.slice(0, 3)}
-                </div>
+          {/* ── Calendar Grid ── */}
+          <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 pb-1">
+            <div className="min-w-[580px]">
 
-                {MEAL_TYPES.map(type => {
-                  if (type === 'lunch') {
-                    return (
-                      <div key={type} className="space-y-1">
-                        <div className="flex items-center gap-1">
-                          <span className="text-sm">{MEAL_ICONS[type]}</span>
-                          <span className="text-xs font-medium text-stone-400">Lunch</span>
-                        </div>
-                        <div className="space-y-1 pl-2 border-l-2 border-stone-100 ml-2">
-                          {LUNCH_SECTIONS.map(sec => {
-                            const meal = meals.find(m => m.day_of_week === i && m.meal_type === 'lunch' && (m.section ?? 'main') === sec.key)
-                            const isQuickAdd = !!meal?.recipe_data?.grams_per_person
-                            const displayName = isQuickAdd
-                              ? `${meal!.recipe_data!.name} · ${householdSize * (meal!.recipe_data!.grams_per_person ?? 0)}g`
-                              : meal?.meal_name
-                            const isSimple = sec.key !== 'main'
-                            return (
-                              <div key={sec.key} className="flex items-center gap-1 min-h-[20px]">
-                                <span className="text-xs w-4 flex-shrink-0 text-stone-300">{sec.icon}</span>
-                                {meal ? (
-                                  <div className="flex-1 min-w-0 flex items-center gap-0.5">
-                                    <p className="text-xs text-stone-600 truncate flex-1 leading-snug">{displayName}</p>
-                                    {meal.recipe_data?.is_healthy && <span className="text-[9px] text-green-500 flex-shrink-0">🌿</span>}
-                                    <button
-                                      onClick={() => isSimple ? setQuickAddState({ day: i, section: sec.key }) : setPickerState({ day: i, mealType: 'lunch', section: sec.key })}
-                                      className="text-stone-300 hover:text-stone-600 text-xs p-0.5 flex-shrink-0 transition-colors" title="Change"
-                                    >✎</button>
-                                    <button onClick={() => clearMeal(i, 'lunch', sec.key)} className="text-stone-300 hover:text-red-400 text-xs p-0.5 flex-shrink-0 transition-colors" title="Remove">✕</button>
+              {/* Day header row */}
+              <div className="grid grid-cols-[64px_repeat(7,minmax(0,1fr))] border-b-2 border-stone-200">
+                <div className="border-r border-stone-200" /> {/* corner */}
+                {DAYS.map((day, i) => {
+                  const isToday = i === todayIndex
+                  const dayDate = new Date(currentMonday)
+                  dayDate.setDate(dayDate.getDate() + i)
+                  return (
+                    <div
+                      key={day}
+                      className={`py-3 text-center border-r last:border-r-0 border-stone-200 ${isToday ? 'bg-stone-900' : 'bg-stone-50'}`}
+                    >
+                      <p className={`text-[9px] font-bold uppercase tracking-[0.18em] ${isToday ? 'text-stone-400' : 'text-stone-400'}`}>
+                        {day.slice(0, 3)}
+                      </p>
+                      <p className={`text-xl font-black leading-none mt-1 ${isToday ? 'text-white' : 'text-stone-300'}`}>
+                        {dayDate.getDate()}
+                      </p>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Meal rows */}
+              {MEAL_TYPES.map(type => (
+                <div key={type} className={`grid grid-cols-[64px_repeat(7,minmax(0,1fr))] border-b border-stone-100 ${type === 'lunch' ? 'min-h-[130px]' : 'min-h-[90px]'}`}>
+                  {/* Row label */}
+                  <div className="border-r border-stone-200 p-2.5 flex items-start justify-end pt-3">
+                    <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-stone-400 text-right">
+                      {MEAL_LABEL[type]}
+                    </span>
+                  </div>
+
+                  {/* Day cells */}
+                  {DAYS.map((_, i) => {
+                    const isToday = i === todayIndex
+                    const cellBase = `border-r last:border-r-0 border-stone-100 p-2.5 ${isToday ? 'bg-stone-50' : 'bg-white'}`
+
+                    if (type === 'lunch') {
+                      return (
+                        <div key={i} className={cellBase}>
+                          <div className="space-y-1">
+                            {LUNCH_SECTIONS.map(sec => {
+                              const meal = meals.find(m =>
+                                m.day_of_week === i && m.meal_type === 'lunch' && (m.section ?? 'main') === sec.key
+                              )
+                              const isSimple = sec.key !== 'main'
+                              const displayName = meal?.recipe_data?.grams_per_person
+                                ? `${meal.recipe_data.name} · ${householdSize * meal.recipe_data.grams_per_person}g`
+                                : meal?.meal_name
+
+                              return meal ? (
+                                <div key={sec.key} className="group">
+                                  <div className="flex items-start gap-1.5">
+                                    <span className="text-[8px] font-semibold uppercase tracking-wide text-stone-400 mt-0.5 flex-shrink-0 w-6">{sec.label.slice(0,4)}</span>
+                                    <p className="text-[11px] text-stone-700 flex-1 leading-snug">{displayName}</p>
+                                    {meal.recipe_data?.is_healthy && <span className="text-[9px] text-stone-400 flex-shrink-0 mt-0.5">✦</span>}
                                   </div>
-                                ) : (
-                                  <button
-                                    onClick={() => isSimple ? setQuickAddState({ day: i, section: sec.key }) : setPickerState({ day: i, mealType: 'lunch', section: sec.key })}
-                                    className="text-xs text-stone-300 hover:text-green-500 transition-colors leading-snug"
-                                  >
-                                    + {sec.label.toLowerCase()}
-                                  </button>
-                                )}
-                              </div>
-                            )
-                          })}
+                                  <div className="opacity-0 group-hover:opacity-100 flex gap-2 mt-0.5 ml-7">
+                                    <button onClick={() => isSimple ? setQuickAddState({ day: i, section: sec.key }) : setPickerState({ day: i, mealType: 'lunch', section: sec.key })} className="text-[9px] text-stone-400 hover:text-stone-700 transition-colors">edit</button>
+                                    <button onClick={() => clearMeal(i, 'lunch', sec.key)} className="text-[9px] text-stone-400 hover:text-red-500 transition-colors">remove</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  key={sec.key}
+                                  onClick={() => isSimple ? setQuickAddState({ day: i, section: sec.key }) : setPickerState({ day: i, mealType: 'lunch', section: sec.key })}
+                                  className="flex items-center gap-1.5 group"
+                                >
+                                  <span className="text-[8px] font-semibold uppercase tracking-wide text-stone-300 w-6 flex-shrink-0">{sec.label.slice(0,4)}</span>
+                                  <span className="text-[11px] text-stone-200 group-hover:text-stone-500 transition-colors">+</span>
+                                </button>
+                              )
+                            })}
+                          </div>
                         </div>
-                      </div>
+                      )
+                    }
+
+                    const meal = meals.find(m =>
+                      m.day_of_week === i && m.meal_type === type && (m.section ?? 'main') === 'main'
                     )
-                  } else {
-                    const meal = meals.find(m => m.day_of_week === i && m.meal_type === type && (m.section ?? 'main') === 'main')
+
                     return (
-                      <div key={type} className="flex items-start gap-1.5 min-h-[26px]">
-                        <span className="text-sm mt-0.5 flex-shrink-0">{MEAL_ICONS[type]}</span>
+                      <div key={i} className={cellBase}>
                         {meal ? (
-                          <div className="flex-1 min-w-0 flex items-start gap-1">
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs text-stone-700 leading-snug line-clamp-2">{meal.meal_name}</p>
-                              {meal.recipe_data?.is_healthy && <span className="text-[10px] text-green-600 font-medium">🌿 healthy</span>}
-                            </div>
-                            <div className="flex gap-0.5 flex-shrink-0 mt-0.5">
-                              <button onClick={() => setPickerState({ day: i, mealType: type, section: 'main' })} className="text-stone-300 hover:text-stone-600 text-xs p-0.5 transition-colors" title="Change">✎</button>
-                              <button onClick={() => clearMeal(i, type, 'main')} className="text-stone-300 hover:text-red-400 text-xs p-0.5 transition-colors" title="Remove">✕</button>
+                          <div className="group h-full">
+                            <p className="text-[11px] text-stone-700 leading-snug">{meal.meal_name}</p>
+                            {meal.recipe_data?.is_healthy && (
+                              <span className="text-[9px] text-stone-400 font-medium mt-0.5 block">✦ healthy</span>
+                            )}
+                            <div className="opacity-0 group-hover:opacity-100 flex gap-2 mt-1.5 transition-opacity">
+                              <button onClick={() => setPickerState({ day: i, mealType: type, section: 'main' })} className="text-[9px] text-stone-400 hover:text-stone-700 transition-colors">edit</button>
+                              <button onClick={() => clearMeal(i, type, 'main')} className="text-[9px] text-stone-400 hover:text-red-500 transition-colors">remove</button>
                             </div>
                           </div>
                         ) : (
-                          <button onClick={() => setPickerState({ day: i, mealType: type, section: 'main' })} className="text-xs text-stone-300 hover:text-green-500 transition-colors text-left leading-snug">
-                            + {type}
+                          <button
+                            onClick={() => setPickerState({ day: i, mealType: type, section: 'main' })}
+                            className="w-full h-full min-h-[70px] flex items-start text-sm text-stone-200 hover:text-stone-500 transition-colors"
+                          >
+                            +
                           </button>
                         )}
                       </div>
                     )
-                  }
-                })}
-              </div>
-            ))}
+                  })}
+                </div>
+              ))}
+            </div>
           </div>
 
-          {hasMeals && (
-            <div className="flex justify-center">
+          {/* ── CTA ── */}
+          <div className="mt-8 pb-6">
+            {meals.length > 0 ? (
               <button
                 onClick={generateShoppingList}
                 disabled={generatingList}
-                className="bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium px-6 py-2.5 rounded-xl text-sm transition-colors flex items-center gap-2"
+                className="flex items-center gap-2 px-5 py-2.5 bg-stone-900 hover:bg-stone-700 disabled:bg-stone-300 text-white text-sm font-semibold rounded-xl transition-colors"
               >
-                <span>🛒</span>
-                {generatingList
-                  ? 'Generating...'
-                  : `Generate Shopping List for ${householdSize} ${householdSize === 1 ? 'person' : 'people'}`}
+                {generatingList ? 'Generating…' : `Generate shopping list · ${householdSize} ${householdSize === 1 ? 'person' : 'people'}`}
               </button>
-            </div>
-          )}
+            ) : (
+              <p className="text-xs text-stone-400">Tap any cell to add a meal.</p>
+            )}
+          </div>
         </>
       )}
 

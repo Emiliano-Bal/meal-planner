@@ -164,13 +164,13 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
               onChange={e => setUrlInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && fetchFromUrl()}
               placeholder="https://www.example.com/recipes/chicken-tikka..."
-              className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent"
             />
             {urlError && <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3.5 py-2.5">{urlError}</p>}
             <button
               onClick={fetchFromUrl}
               disabled={fetchingUrl}
-              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
+              className="w-full bg-stone-900 hover:bg-stone-800 disabled:bg-stone-300 text-white font-medium py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
             >
               {fetchingUrl ? <><span className="animate-spin inline-block">⏳</span> Fetching recipe...</> : '✨ Fetch & Parse'}
             </button>
@@ -186,13 +186,13 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
               onChange={e => setPasteText(e.target.value)}
               placeholder="Paste your full recipe here — ingredients, amounts, and instructions..."
               rows={12}
-              className="w-full px-3.5 py-3 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none"
+              className="w-full px-3.5 py-3 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent resize-none"
             />
             {parseError && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3.5 py-2.5">{parseError}</p>}
             <button
               onClick={parsePasted}
               disabled={parsing}
-              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
+              className="w-full bg-stone-900 hover:bg-stone-800 disabled:bg-stone-300 text-white font-medium py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
             >
               {parsing ? <><span className="animate-spin inline-block">⏳</span> Parsing recipe...</> : '✨ Parse with AI'}
             </button>
@@ -205,17 +205,17 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-stone-700 mb-1.5">Recipe name *</label>
-                <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Healthy Orange Chicken" className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Healthy Orange Chicken" className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent" />
               </div>
 
               <div className="flex gap-3">
                 <div className="flex-1">
                   <label className="block text-sm font-medium text-stone-700 mb-1.5">Category</label>
-                  <input value={category} onChange={e => setCategory(e.target.value)} placeholder="e.g. Chicken, Salad..." className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                  <input value={category} onChange={e => setCategory(e.target.value)} placeholder="e.g. Chicken, Salad..." className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent" />
                 </div>
                 <div className="w-28">
                   <label className="block text-sm font-medium text-stone-700 mb-1.5">Servings</label>
-                  <input type="number" min={1} max={20} value={servings} onChange={e => setServings(Math.max(1, parseInt(e.target.value) || 4))} className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                  <input type="number" min={1} max={20} value={servings} onChange={e => setServings(Math.max(1, parseInt(e.target.value) || 4))} className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent" />
                 </div>
               </div>
 
@@ -224,7 +224,7 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
                   <p className="text-sm font-medium text-stone-700">Healthy recipe 🌿</p>
                   <p className="text-xs text-stone-400 mt-0.5">Mark this as a healthy option</p>
                 </div>
-                <button onClick={() => setIsHealthy(h => !h)} className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ${isHealthy ? 'bg-green-500' : 'bg-stone-200'}`}>
+                <button onClick={() => setIsHealthy(h => !h)} className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ${isHealthy ? 'bg-stone-800' : 'bg-stone-200'}`}>
                   <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${isHealthy ? 'translate-x-5 left-0.5' : 'left-0.5'}`} />
                 </button>
               </div>
@@ -232,13 +232,13 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-sm font-medium text-stone-700">Ingredients *</label>
-                  <button onClick={addIngredient} className="text-xs text-green-600 hover:text-green-700 font-medium">+ Add row</button>
+                  <button onClick={addIngredient} className="text-xs text-stone-700 hover:text-stone-700 font-medium">+ Add row</button>
                 </div>
                 <div className="space-y-2">
                   {ingredients.map((ing, i) => (
                     <div key={i} className="flex gap-2 items-center">
-                      <input value={ing.measure} onChange={e => updateIngredient(i, 'measure', e.target.value)} placeholder="Amount" className="w-24 px-3 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent" />
-                      <input value={ing.name} onChange={e => updateIngredient(i, 'name', e.target.value)} placeholder="Ingredient name" className="flex-1 px-3 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                      <input value={ing.measure} onChange={e => updateIngredient(i, 'measure', e.target.value)} placeholder="Amount" className="w-24 px-3 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent" />
+                      <input value={ing.name} onChange={e => updateIngredient(i, 'name', e.target.value)} placeholder="Ingredient name" className="flex-1 px-3 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent" />
                       {ingredients.length > 1 && <button onClick={() => removeIngredient(i)} className="text-stone-300 hover:text-red-400 transition-colors text-sm w-6 flex-shrink-0">✕</button>}
                     </div>
                   ))}
@@ -247,14 +247,14 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
 
               <div>
                 <label className="block text-sm font-medium text-stone-700 mb-1.5">Instructions</label>
-                <textarea value={instructions} onChange={e => setInstructions(e.target.value)} placeholder="Steps to prepare the recipe..." rows={4} className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none" />
+                <textarea value={instructions} onChange={e => setInstructions(e.target.value)} placeholder="Steps to prepare the recipe..." rows={4} className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent resize-none" />
               </div>
 
               {error && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3.5 py-2.5">{error}</p>}
             </div>
 
             <div className="p-5 border-t border-stone-100 flex-shrink-0">
-              <button onClick={save} disabled={saving} className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-3 rounded-xl text-sm transition-colors">
+              <button onClick={save} disabled={saving} className="w-full bg-stone-900 hover:bg-stone-800 disabled:bg-stone-300 text-white font-medium py-3 rounded-xl text-sm transition-colors">
                 {saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Save Recipe'}
               </button>
             </div>

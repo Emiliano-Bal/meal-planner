@@ -62,7 +62,7 @@ export default function HouseholdSizeModal({ current, onSave, onClose }: Props) 
           <button
             onClick={save}
             disabled={saving}
-            className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white text-sm font-medium transition-colors"
+            className="flex-1 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 disabled:bg-stone-300 text-white text-sm font-medium transition-colors"
           >
             {saving ? 'Saving...' : 'Save'}
           </button>

@@ -10,6 +10,31 @@ function extractJSON(text: string): string {
   return match ? match[0] : text
 }
 
+export async function translateIngredients(names: string[]): Promise<string[]> {
+  if (!names.length) return []
+  const message = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1500,
+    messages: [{
+      role: 'user',
+      content: `Translate these ingredient names to English. Keep the same specificity ("huevo" → "egg", "leche entera" → "whole milk", "pollo a la plancha" → "grilled chicken"). If already English, keep as-is. No markdown, no explanation.
+
+${names.map((n, i) => `${i}: ${n}`).join('\n')}
+
+Return ONLY a JSON array in the exact same order: ["egg","whole milk","tomato"]`,
+    }],
+  })
+  const raw = message.content[0].type === 'text' ? message.content[0].text : ''
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
+  const s = cleaned.indexOf('[')
+  const e = cleaned.lastIndexOf(']')
+  if (s === -1 || e === -1) return names
+  try {
+    const result = JSON.parse(cleaned.slice(s, e + 1)) as string[]
+    return Array.isArray(result) && result.length === names.length ? result : names
+  } catch { return names }
+}
+
 export async function parseRecipeUrl(url: string): Promise<RecipePrefill> {
   const res = await fetch(url, {
     headers: {
@@ -96,7 +121,7 @@ export async function suggestLocalProducts(
 
   const message = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 1500,
+    max_tokens: 4000,
     messages: [{
       role: 'user',
       content: `User is near "${region}" and needs to buy these ingredients at a local supermarket. For each one, suggest the most appropriate LOCAL product.${storeClause}${dietaryClause}
@@ -106,17 +131,24 @@ IMPORTANT rules:
 - "Fresh" means uncooked. "Smoked" means smoked, not cured/dried.
 - Give a real local brand + store where available. Keep it short (one line).
 - Use the local language name if it differs from English.
+- Do NOT wrap the response in markdown code fences.
 
 ${ingredients.map((ing, i) => `${i}: ${ing}`).join('\n')}
 
-Return ONLY a JSON array (0-based index):
+Return ONLY a raw JSON array (no markdown, no explanation):
 [{"index":0,"suggestion":"local product name (store)"},{"index":1,"suggestion":"..."}]`,
     }],
   })
 
-  const text = message.content[0].type === 'text' ? message.content[0].text : '[]'
-  const match = text.match(/\[[\s\S]*\]/)
-  return match ? JSON.parse(match[0]) : []
+  const raw = message.content[0].type === 'text' ? message.content[0].text : ''
+  // Strip markdown code fences if present
+  const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
+  const start = text.indexOf('[')
+  const end = text.lastIndexOf(']')
+  if (start === -1 || end === -1 || start >= end) {
+    throw new Error(`Could not parse AI response (truncated or unexpected format). Try again.`)
+  }
+  return JSON.parse(text.slice(start, end + 1)) as { index: number; suggestion: string }[]
 }
 
 export async function enrichRecipe(recipe: {

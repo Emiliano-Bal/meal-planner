@@ -45,7 +45,7 @@ export default function LoginPage() {
                   type="text"
                   placeholder="Your name"
                   required
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm transition"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent text-sm transition"
                 />
               </div>
             )}
@@ -59,7 +59,7 @@ export default function LoginPage() {
                 type="email"
                 placeholder="you@example.com"
                 required
-                className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm transition"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent text-sm transition"
               />
             </div>
 
@@ -73,7 +73,7 @@ export default function LoginPage() {
                 placeholder="••••••••"
                 required
                 minLength={6}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm transition"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent text-sm transition"
               />
             </div>
 
@@ -86,7 +86,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-2.5 rounded-xl text-sm transition mt-2"
+              className="w-full bg-stone-900 hover:bg-stone-700 disabled:bg-stone-300 text-white font-medium py-2.5 rounded-xl text-sm transition mt-2"
             >
               {loading ? 'Please wait...' : mode === 'login' ? 'Sign in' : 'Create account'}
             </button>
@@ -96,7 +96,7 @@ export default function LoginPage() {
             {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
             <button
               onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(null) }}
-              className="text-green-600 hover:text-green-700 font-medium"
+              className="text-stone-700 hover:text-stone-900 font-medium"
             >
               {mode === 'login' ? 'Sign up' : 'Sign in'}
             </button>
