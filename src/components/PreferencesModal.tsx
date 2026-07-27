@@ -72,8 +72,8 @@ export default function PreferencesModal({ onClose }: Props) {
                 onClick={() => toggleDietary(opt.key)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
                   dietary.includes(opt.key)
-                    ? 'bg-green-600 border-green-600 text-white'
-                    : 'bg-stone-50 border-stone-200 text-stone-600 hover:border-green-400 hover:text-green-700'
+                    ? 'bg-stone-900 border-stone-900 text-white'
+                    : 'bg-stone-50 border-stone-200 text-stone-600 hover:border-stone-500 hover:text-stone-700'
                 }`}
               >
                 <span>{opt.icon}</span>
@@ -82,7 +82,7 @@ export default function PreferencesModal({ onClose }: Props) {
             ))}
           </div>
           {dietary.length > 0 && (
-            <p className="text-xs text-green-600 mt-2">
+            <p className="text-xs text-stone-500 mt-2">
               AI-generated recipes will respect these restrictions.
             </p>
           )}
@@ -97,7 +97,7 @@ export default function PreferencesModal({ onClose }: Props) {
               onChange={e => setStoreInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && addStore()}
               placeholder="e.g. Mercadona, Lidl..."
-              className="flex-1 px-3 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              className="flex-1 px-3 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent"
             />
             <button
               onClick={addStore}
@@ -110,7 +110,7 @@ export default function PreferencesModal({ onClose }: Props) {
           {supermarkets.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
               {supermarkets.map(store => (
-                <span key={store} className="flex items-center gap-1 bg-blue-50 border border-blue-200 text-blue-700 text-xs px-2.5 py-1 rounded-full font-medium">
+                <span key={store} className="flex items-center gap-1 bg-stone-100 border border-stone-200 text-stone-700 text-xs px-2.5 py-1 rounded-full font-medium">
                   🏪 {store}
                   <button onClick={() => removeStore(store)} className="hover:text-red-500 transition-colors ml-0.5">✕</button>
                 </span>
@@ -123,7 +123,7 @@ export default function PreferencesModal({ onClose }: Props) {
 
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-sm font-medium hover:bg-stone-50 transition-colors">Cancel</button>
-          <button onClick={save} className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors">Save</button>
+          <button onClick={save} className="flex-1 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white text-sm font-medium transition-colors">Save</button>
         </div>
       </div>
     </div>

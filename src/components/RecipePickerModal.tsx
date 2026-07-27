@@ -79,6 +79,7 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
   const [enriching, setEnriching] = useState(false)
   const [generatingRecipe, setGeneratingRecipe] = useState(false)
   const [dietary, setDietary] = useState<string[]>([])
+  const [savedToLibrary, setSavedToLibrary] = useState(false)
 
   useEffect(() => {
     getCategories().then(setCategories)
@@ -183,21 +184,43 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
 
   async function handleGenerateRecipe(name: string) {
     setGeneratingRecipe(true)
+    setSavedToLibrary(false)
     try {
       const result = await generateRecipe(name, householdSize, dietary)
-      const recipe: RecipeData = {
-        id: `ai_${Date.now()}`,
-        name: result.name ?? name,
-        thumbnail: '',
+
+      const recipeName = result.name ?? name
+      const payload = {
+        name: recipeName,
         category: result.category ?? 'Custom',
-        area: '',
+        servings: result.servings ?? householdSize,
+        is_healthy: result.is_healthy ?? false,
         instructions: result.instructions ?? '',
         ingredients: result.ingredients ?? [],
-        is_healthy: result.is_healthy ?? false,
-        servings: result.servings ?? householdSize,
-        source: 'custom',
       }
-      setDetail(recipe)
+
+      // Save to database so the recipe persists
+      let recipeId = `ai_${Date.now()}`
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: saved } = await supabase
+          .from('custom_recipes')
+          .insert({ user_id: user.id, ...payload })
+          .select()
+          .single()
+        if (saved) {
+          recipeId = `custom_${saved.id}`
+          setCustomRecipes(prev => [saved, ...prev])
+          setSavedToLibrary(true)
+        }
+      }
+
+      setDetail({
+        id: recipeId,
+        thumbnail: '',
+        area: '',
+        source: 'custom',
+        ...payload,
+      })
     } finally {
       setGeneratingRecipe(false)
     }
@@ -232,17 +255,20 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
 
         {detail ? (
           <div className="flex-1 overflow-y-auto p-5">
-            <button onClick={() => setDetail(null)} className="text-sm text-stone-400 hover:text-stone-700 mb-4 flex items-center gap-1">← Back</button>
+            <div className="flex items-center justify-between mb-4">
+              <button onClick={() => { setDetail(null); setSavedToLibrary(false) }} className="text-sm text-stone-400 hover:text-stone-700 flex items-center gap-1">← Back</button>
+              {savedToLibrary && (
+                <span className="text-xs text-stone-500 font-medium">✓ Saved to My Recipes</span>
+              )}
+            </div>
             {detail.thumbnail ? (
               <img src={detail.thumbnail} alt={detail.name} className="w-full h-48 object-cover rounded-2xl mb-4" />
             ) : (
-              <div className="w-full h-32 bg-gradient-to-br from-green-50 to-emerald-100 rounded-2xl mb-4 flex items-center justify-center">
-                <span className="text-5xl">{detail.is_healthy ? '🥦' : '🍽️'}</span>
-              </div>
+              <div className="w-full h-20 bg-stone-100 rounded-2xl mb-4" />
             )}
             <div className="flex items-center gap-2 mb-1">
               <h3 className="text-lg font-semibold text-stone-800">{detail.name}</h3>
-              {detail.is_healthy && <span className="text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded-full font-medium flex-shrink-0">🌿 Healthy</span>}
+              {detail.is_healthy && <span className="text-xs bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full font-medium flex-shrink-0">✦ Healthy</span>}
             </div>
             <p className="text-xs text-stone-400 mb-3">
               {detail.category}{detail.area ? ` · ${detail.area}` : ''}{detail.servings ? ` · Serves ${detail.servings}` : ''}
@@ -252,7 +278,7 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
               <button
                 onClick={handleEnrich}
                 disabled={enriching}
-                className="w-full mb-4 py-2 rounded-xl border border-dashed border-stone-200 text-stone-400 text-xs font-medium hover:border-green-400 hover:text-green-600 hover:bg-green-50 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
+                className="w-full mb-4 py-2 rounded-xl border border-dashed border-stone-200 text-stone-400 text-xs font-medium hover:border-stone-300 hover:text-stone-700 hover:bg-stone-50 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
               >
                 {enriching
                   ? <><span className="animate-spin inline-block">⏳</span> Enhancing...</>
@@ -263,7 +289,7 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
             <div className="flex items-center justify-between mb-2">
               <h4 className="text-sm font-medium text-stone-700">Ingredients</h4>
               <div className="flex items-center gap-2">
-                {scale !== 1 && <span className="text-xs text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-full">Scaled for {householdSize} people</span>}
+                {scale !== 1 && <span className="text-xs text-stone-700 font-medium bg-stone-50 px-2 py-0.5 rounded-full">Scaled for {householdSize} people</span>}
               </div>
             </div>
             <ul className="grid grid-cols-2 gap-1 mb-4">
@@ -284,7 +310,7 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                     .filter(Boolean)
                     .map((step, i) => (
                       <li key={i} className="flex gap-2.5 text-xs text-stone-600 leading-relaxed">
-                        <span className="flex-shrink-0 w-5 h-5 bg-green-100 text-green-700 rounded-full flex items-center justify-center font-semibold text-[10px]">{i + 1}</span>
+                        <span className="flex-shrink-0 w-5 h-5 bg-stone-100 text-stone-700 rounded-full flex items-center justify-center font-semibold text-[10px]">{i + 1}</span>
                         <span className="flex-1 pt-0.5">{step}</span>
                       </li>
                     ))}
@@ -299,9 +325,9 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                     <h4 className="text-sm font-medium text-stone-700 mb-2">🌿 Your Healthy Versions</h4>
                     <div className="space-y-2 mb-3">
                       {healthyAlts.map(alt => (
-                        <button key={alt.id} onClick={() => setDetail(customToRecipeData(alt))} className="w-full text-left px-3.5 py-2.5 rounded-xl border border-green-100 bg-green-50 hover:border-green-300 hover:bg-green-100 transition-colors">
-                          <p className="text-sm font-medium text-green-800">{alt.name}</p>
-                          <p className="text-xs text-green-600 mt-0.5">Serves {alt.servings} · {alt.category ?? 'Custom'}</p>
+                        <button key={alt.id} onClick={() => setDetail(customToRecipeData(alt))} className="w-full text-left px-3.5 py-2.5 rounded-xl border border-stone-100 bg-stone-50 hover:border-stone-300 hover:bg-stone-100 transition-colors">
+                          <p className="text-sm font-medium text-stone-800">{alt.name}</p>
+                          <p className="text-xs text-stone-700 mt-0.5">Serves {alt.servings} · {alt.category ?? 'Custom'}</p>
                         </button>
                       ))}
                     </div>
@@ -310,14 +336,14 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                 <button
                   onClick={handleCreateHealthy}
                   disabled={generatingHealthy}
-                  className="w-full py-2.5 rounded-xl border border-dashed border-green-300 text-green-600 text-sm font-medium hover:bg-green-50 disabled:opacity-60 transition-colors flex items-center justify-center gap-1.5"
+                  className="w-full py-2.5 rounded-xl border border-dashed border-stone-300 text-stone-700 text-sm font-medium hover:bg-stone-50 disabled:opacity-60 transition-colors flex items-center justify-center gap-1.5"
                 >
                   {generatingHealthy ? <><span className="animate-spin inline-block">⏳</span> Generating...</> : '🌿 Create Healthy Version with AI'}
                 </button>
               </div>
             )}
 
-            <button onClick={() => onSelect(detail)} className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 rounded-xl text-sm transition-colors">
+            <button onClick={() => onSelect(detail)} className="w-full bg-stone-900 hover:bg-stone-800 text-white font-medium py-3 rounded-xl text-sm transition-colors">
               {addLabel}
             </button>
           </div>
@@ -338,7 +364,7 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                       onChange={e => setQuery(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && search(query)}
                       placeholder="Search recipes..."
-                      className="flex-1 px-3.5 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                      className="flex-1 px-3.5 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent"
                     />
                     <button onClick={() => search(query)} className="px-4 py-2 bg-stone-800 text-white rounded-xl text-sm font-medium hover:bg-stone-700 transition-colors">Search</button>
                   </div>
@@ -346,7 +372,7 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                     <button
                       onClick={() => handleGenerateRecipe(query.trim())}
                       disabled={generatingRecipe}
-                      className="w-full mb-2 py-2 rounded-xl bg-green-50 hover:bg-green-100 disabled:opacity-60 text-green-700 text-xs font-medium border border-green-200 transition-colors flex items-center justify-center gap-1.5"
+                      className="w-full mb-2 py-2 rounded-xl bg-stone-50 hover:bg-stone-100 disabled:opacity-60 text-stone-700 text-xs font-medium border border-stone-200 transition-colors flex items-center justify-center gap-1.5"
                     >
                       {generatingRecipe
                         ? <><span className="animate-spin inline-block">⏳</span> Generating recipe...</>
@@ -358,7 +384,7 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                       <button
                         key={p.label}
                         onClick={() => p.cat ? browseCategory(p.cat) : (p.q && (setQuery(p.q), search(p.q)))}
-                        className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full font-medium bg-stone-50 text-stone-600 border border-stone-200 hover:border-green-400 hover:text-green-700 hover:bg-green-50 transition-colors"
+                        className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full font-medium bg-stone-50 text-stone-600 border border-stone-200 hover:border-stone-300 hover:text-stone-700 hover:bg-stone-50 transition-colors"
                       >
                         {p.label}
                       </button>
@@ -366,12 +392,12 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                   </div>
                   <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
                     {categories.slice(0, 14).map(cat => (
-                      <button key={cat} onClick={() => browseCategory(cat)} className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${activeCategory === cat ? 'bg-green-600 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}>{cat}</button>
+                      <button key={cat} onClick={() => browseCategory(cat)} className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${activeCategory === cat ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}>{cat}</button>
                     ))}
                   </div>
                 </>
               ) : (
-                <button onClick={() => setHealthyOnly(h => !h)} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${healthyOnly ? 'bg-green-600 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}>🌿 Healthy only</button>
+                <button onClick={() => setHealthyOnly(h => !h)} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${healthyOnly ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}>🌿 Healthy only</button>
               )}
             </div>
 
@@ -387,7 +413,7 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                   <>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       {results.map(recipe => (
-                        <button key={recipe.id} onClick={() => openDetail(recipe)} className="text-left rounded-2xl overflow-hidden border border-stone-100 hover:border-green-300 hover:shadow-sm transition-all group">
+                        <button key={recipe.id} onClick={() => openDetail(recipe)} className="text-left rounded-2xl overflow-hidden border border-stone-100 hover:border-stone-300 hover:shadow-sm transition-all group">
                           <img src={recipe.thumbnail} alt={recipe.name} className="w-full h-28 object-cover group-hover:scale-105 transition-transform duration-200" />
                           <div className="p-2.5">
                             <p className="text-xs font-medium text-stone-700 leading-snug line-clamp-2">{recipe.name}</p>
@@ -409,14 +435,14 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {filteredCustom.map(recipe => (
-                      <button key={recipe.id} onClick={() => openDetail(customToRecipeData(recipe))} className="text-left rounded-2xl overflow-hidden border border-stone-100 hover:border-green-300 hover:shadow-sm transition-all">
-                        <div className="w-full h-28 bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center">
+                      <button key={recipe.id} onClick={() => openDetail(customToRecipeData(recipe))} className="text-left rounded-2xl overflow-hidden border border-stone-100 hover:border-stone-300 hover:shadow-sm transition-all">
+                        <div className="w-full h-28 bg-stone-100 flex items-center justify-center">
                           <span className="text-3xl">{recipe.is_healthy ? '🥦' : '🍽️'}</span>
                         </div>
                         <div className="p-2.5">
                           <div className="flex items-start gap-1">
                             <p className="text-xs font-medium text-stone-700 leading-snug line-clamp-2 flex-1">{recipe.name}</p>
-                            {recipe.is_healthy && <span className="text-green-500 text-xs flex-shrink-0">🌿</span>}
+                            {recipe.is_healthy && <span className="text-stone-500 text-xs flex-shrink-0">🌿</span>}
                           </div>
                           {recipe.category && <p className="text-xs text-stone-400 mt-0.5">{recipe.category}</p>}
                         </div>

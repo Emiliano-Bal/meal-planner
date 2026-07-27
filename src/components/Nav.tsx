@@ -9,9 +9,9 @@ import HouseholdSizeModal from '@/components/HouseholdSizeModal'
 import PreferencesModal from '@/components/PreferencesModal'
 
 const links = [
-  { href: '/dashboard', label: 'Menu', icon: '📅' },
-  { href: '/shopping', label: 'Shopping', icon: '🛒' },
-  { href: '/recipes', label: 'Recipes', icon: '🍳' },
+  { href: '/dashboard', label: 'Menu' },
+  { href: '/shopping', label: 'Shopping' },
+  { href: '/recipes', label: 'Recipes' },
 ]
 
 export default function Nav() {
@@ -68,11 +68,13 @@ export default function Nav() {
 
   return (
     <>
-      <header className="bg-white border-b border-stone-100 sticky top-0 z-10">
+      <header className="bg-[#F5F4F1] border-b border-stone-200 sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
-          <Link href="/dashboard" className="font-semibold text-stone-800 flex items-center gap-2">
-            <span>🥗</span>
-            <span className="text-sm">Meal Planner</span>
+          <Link href="/dashboard" className="flex items-center gap-2 group">
+            <div className="w-7 h-7 rounded-lg bg-stone-900 flex items-center justify-center text-white text-xs font-bold">
+              L
+            </div>
+            <span className="text-sm font-bold text-stone-900 tracking-tight">LaCena</span>
           </Link>
 
           <nav className="flex items-center gap-1">
@@ -85,15 +87,15 @@ export default function Nav() {
                   onChange={e => setRegionDraft(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') saveRegion(); if (e.key === 'Escape') setEditingRegion(false) }}
                   placeholder="City or region..."
-                  className="w-36 px-2.5 py-1 text-xs rounded-lg border border-green-300 bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+                  className="w-36 px-2.5 py-1 text-xs rounded-lg border border-stone-300 bg-white focus:outline-none focus:ring-2 focus:ring-stone-400"
                 />
-                <button onClick={saveRegion} className="text-xs bg-green-600 text-white px-2 py-1 rounded-lg hover:bg-green-700 transition-colors">Save</button>
+                <button onClick={saveRegion} className="text-xs bg-stone-900 text-white px-2 py-1 rounded-lg hover:bg-stone-700 transition-colors">Save</button>
                 <button onClick={() => setEditingRegion(false)} className="text-xs text-stone-400 hover:text-stone-600 px-1.5 py-1 rounded-lg">✕</button>
               </div>
             ) : (
               <button
                 onClick={() => setEditingRegion(true)}
-                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-500 transition-colors mr-1"
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg hover:bg-stone-100 text-stone-400 hover:text-stone-700 transition-colors mr-1"
                 title="Set your city for local product suggestions"
               >
                 📍 {region || 'Set city'}
@@ -102,7 +104,7 @@ export default function Nav() {
 
             <button
               onClick={() => setShowPrefs(true)}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-500 transition-colors mr-1"
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg hover:bg-stone-100 text-stone-400 hover:text-stone-700 transition-colors mr-1"
               title="Dietary restrictions & preferred supermarkets"
             >
               ⚙️ Prefs
@@ -110,25 +112,24 @@ export default function Nav() {
 
             <button
               onClick={() => setShowModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-600 transition-colors mr-1"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg hover:bg-stone-100 text-stone-400 hover:text-stone-700 transition-colors mr-1"
             >
               👥 {householdSize} {householdSize === 1 ? 'person' : 'people'}
             </button>
 
-            {links.map(({ href, label, icon }) => {
+            {links.map(({ href, label }) => {
               const active = pathname.startsWith(href)
               return (
                 <Link
                   key={href}
                   href={href}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
                     active
-                      ? 'bg-green-50 text-green-700'
-                      : 'text-stone-500 hover:text-stone-800 hover:bg-stone-50'
+                      ? 'text-stone-900 font-semibold'
+                      : 'text-stone-400 hover:text-stone-800 hover:bg-stone-100 font-medium'
                   }`}
                 >
-                  <span>{icon}</span>
-                  <span className="hidden sm:inline">{label}</span>
+                  {label}
                 </Link>
               )
             })}

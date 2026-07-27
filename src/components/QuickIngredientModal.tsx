@@ -75,7 +75,7 @@ export default function QuickIngredientModal({ section, householdSize, dayName, 
           onChange={e => setIngredient(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleAdd()}
           placeholder={cfg.placeholder}
-          className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent mb-4"
+          className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent mb-4"
         />
 
         <div className="flex items-end gap-4 mb-5">
@@ -89,14 +89,14 @@ export default function QuickIngredientModal({ section, householdSize, dayName, 
                 step={5}
                 value={gramsPerPerson}
                 onChange={e => setGramsPerPerson(Math.max(10, parseInt(e.target.value) || cfg.defaultGrams))}
-                className="w-20 px-3 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm font-medium text-center focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                className="w-20 px-3 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm font-medium text-center focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent"
               />
               <span className="text-sm text-stone-400">g</span>
             </div>
           </div>
 
           <div className="text-right pb-1">
-            <p className="text-3xl font-bold text-green-600 leading-none">
+            <p className="text-3xl font-bold text-stone-700 leading-none">
               {totalGrams >= 1000 ? `${(totalGrams / 1000).toFixed(1)}kg` : `${totalGrams}g`}
             </p>
             <p className="text-xs text-stone-400 mt-1">for {householdSize} {householdSize === 1 ? 'person' : 'people'}</p>
@@ -105,7 +105,7 @@ export default function QuickIngredientModal({ section, householdSize, dayName, 
 
         <button
           onClick={handleAdd}
-          className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 rounded-xl text-sm transition-colors mb-3"
+          className="w-full bg-stone-900 hover:bg-stone-800 text-white font-medium py-3 rounded-xl text-sm transition-colors mb-3"
         >
           Add to {dayName}
         </button>
