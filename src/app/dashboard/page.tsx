@@ -133,17 +133,29 @@ export default function DashboardPage() {
 
     await supabase.from('shopping_items').delete().eq('menu_id', menu.id)
 
-    const items: { menu_id: string; ingredient: string; quantity: string }[] = []
+    // Deduplicate: combine quantities for the same ingredient name
+    const map = new Map<string, { name: string; quantities: string[] }>()
     for (const meal of meals) {
       if (meal.recipe_data?.ingredients) {
         const servings = meal.recipe_data.servings ?? 4
         const scale = householdSize / servings
         for (const ing of meal.recipe_data.ingredients) {
+          const key = ing.name.toLowerCase().trim()
           const quantity = scale !== 1 ? scaleQuantity(ing.measure, scale) : ing.measure
-          items.push({ menu_id: menu.id, ingredient: ing.name, quantity })
+          if (map.has(key)) {
+            map.get(key)!.quantities.push(quantity)
+          } else {
+            map.set(key, { name: ing.name, quantities: [quantity] })
+          }
         }
       }
     }
+
+    const items = Array.from(map.values()).map(({ name, quantities }) => ({
+      menu_id: menu!.id,
+      ingredient: name,
+      quantity: quantities.join(' + '),
+    }))
 
     if (items.length > 0) {
       await supabase.from('shopping_items').insert(items)

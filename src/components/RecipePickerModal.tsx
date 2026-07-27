@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { searchRecipes, getCategories, filterByCategory, getRecipeById, getFeaturedRecipes } from '@/lib/mealdb'
 import { createClient } from '@/lib/supabase'
 import { scaleQuantity } from '@/lib/utils'
-import { generateHealthyVersion } from '@/app/actions/ai'
+import { generateHealthyVersion, enrichRecipe, generateRecipe } from '@/app/actions/ai'
 import { RecipeData, MealType, CustomRecipe, RecipePrefill } from '@/types'
 import AddRecipeModal from '@/components/AddRecipeModal'
 
@@ -76,11 +76,21 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
   const [healthyOnly, setHealthyOnly] = useState(false)
   const [generatingHealthy, setGeneratingHealthy] = useState(false)
   const [healthyPrefill, setHealthyPrefill] = useState<RecipePrefill | null>(null)
+  const [enriching, setEnriching] = useState(false)
+  const [generatingRecipe, setGeneratingRecipe] = useState(false)
+  const [dietary, setDietary] = useState<string[]>([])
 
   useEffect(() => {
     getCategories().then(setCategories)
     setLoading(true)
     getFeaturedRecipes().then(r => { setResults(r); setLoading(false) })
+    try {
+      const d = localStorage.getItem('user_dietary')
+      if (d) setDietary(JSON.parse(d))
+    } catch {}
+    const handler = (e: Event) => setDietary((e as CustomEvent<string[]>).detail)
+    window.addEventListener('dietary-changed', handler)
+    return () => window.removeEventListener('dietary-changed', handler)
   }, [])
 
   const loadCustomRecipes = useCallback(async () => {
@@ -115,11 +125,33 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
   }, [])
 
   async function openDetail(recipe: RecipeData) {
-    if (recipe.source === 'custom' || recipe.instructions) {
+    if (recipe.source === 'custom') {
       setDetail(recipe)
-    } else {
-      const full = await getRecipeById(recipe.id)
-      if (full) setDetail(full)
+      return
+    }
+    const full = recipe.instructions ? recipe : (await getRecipeById(recipe.id) ?? recipe)
+    setDetail(full)
+    // Check localStorage cache — apply instantly if available, no API call
+    try {
+      const cached = localStorage.getItem(`enriched_${recipe.id}`)
+      if (cached) setDetail(prev => prev ? { ...prev, ...JSON.parse(cached) } : prev)
+    } catch { /* ignore */ }
+  }
+
+  async function handleEnrich() {
+    if (!detail || enriching) return
+    setEnriching(true)
+    try {
+      const enriched = await enrichRecipe({
+        name: detail.name,
+        ingredients: detail.ingredients,
+        instructions: detail.instructions,
+        servings: detail.servings,
+      })
+      setDetail(prev => prev ? { ...prev, ...enriched } : prev)
+      localStorage.setItem(`enriched_${detail.id}`, JSON.stringify(enriched))
+    } catch { /* silently fall back */ } finally {
+      setEnriching(false)
     }
   }
 
@@ -133,7 +165,7 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
         servings: detail.servings ?? householdSize,
         ingredients: detail.ingredients,
         instructions: detail.instructions,
-      })
+      }, dietary)
       setHealthyPrefill({ ...result, servings: householdSize })
     } catch {
       setHealthyPrefill({
@@ -146,6 +178,28 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
       })
     } finally {
       setGeneratingHealthy(false)
+    }
+  }
+
+  async function handleGenerateRecipe(name: string) {
+    setGeneratingRecipe(true)
+    try {
+      const result = await generateRecipe(name, householdSize, dietary)
+      const recipe: RecipeData = {
+        id: `ai_${Date.now()}`,
+        name: result.name ?? name,
+        thumbnail: '',
+        category: result.category ?? 'Custom',
+        area: '',
+        instructions: result.instructions ?? '',
+        ingredients: result.ingredients ?? [],
+        is_healthy: result.is_healthy ?? false,
+        servings: result.servings ?? householdSize,
+        source: 'custom',
+      }
+      setDetail(recipe)
+    } finally {
+      setGeneratingRecipe(false)
     }
   }
 
@@ -190,13 +244,27 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
               <h3 className="text-lg font-semibold text-stone-800">{detail.name}</h3>
               {detail.is_healthy && <span className="text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded-full font-medium flex-shrink-0">🌿 Healthy</span>}
             </div>
-            <p className="text-xs text-stone-400 mb-4">
+            <p className="text-xs text-stone-400 mb-3">
               {detail.category}{detail.area ? ` · ${detail.area}` : ''}{detail.servings ? ` · Serves ${detail.servings}` : ''}
             </p>
 
+            {detail.source !== 'custom' && (
+              <button
+                onClick={handleEnrich}
+                disabled={enriching}
+                className="w-full mb-4 py-2 rounded-xl border border-dashed border-stone-200 text-stone-400 text-xs font-medium hover:border-green-400 hover:text-green-600 hover:bg-green-50 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
+              >
+                {enriching
+                  ? <><span className="animate-spin inline-block">⏳</span> Enhancing...</>
+                  : '✨ Enhance ingredients & steps'}
+              </button>
+            )}
+
             <div className="flex items-center justify-between mb-2">
               <h4 className="text-sm font-medium text-stone-700">Ingredients</h4>
-              {scale !== 1 && <span className="text-xs text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-full">Scaled for {householdSize} people</span>}
+              <div className="flex items-center gap-2">
+                {scale !== 1 && <span className="text-xs text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-full">Scaled for {householdSize} people</span>}
+              </div>
             </div>
             <ul className="grid grid-cols-2 gap-1 mb-4">
               {detail.ingredients.map((ing, i) => (
@@ -209,7 +277,18 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
             {detail.instructions && (
               <>
                 <h4 className="text-sm font-medium text-stone-700 mb-2">Instructions</h4>
-                <p className="text-xs text-stone-600 leading-relaxed whitespace-pre-line mb-4">{detail.instructions}</p>
+                <ol className="space-y-2 mb-4">
+                  {detail.instructions
+                    .split(/\r?\n|\d+\.\s+/)
+                    .map(s => s.trim())
+                    .filter(Boolean)
+                    .map((step, i) => (
+                      <li key={i} className="flex gap-2.5 text-xs text-stone-600 leading-relaxed">
+                        <span className="flex-shrink-0 w-5 h-5 bg-green-100 text-green-700 rounded-full flex items-center justify-center font-semibold text-[10px]">{i + 1}</span>
+                        <span className="flex-1 pt-0.5">{step}</span>
+                      </li>
+                    ))}
+                </ol>
               </>
             )}
 
@@ -261,8 +340,19 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                       placeholder="Search recipes..."
                       className="flex-1 px-3.5 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
                     />
-                    <button onClick={() => search(query)} className="px-4 py-2 bg-green-600 text-white rounded-xl text-sm font-medium hover:bg-green-700 transition-colors">Search</button>
+                    <button onClick={() => search(query)} className="px-4 py-2 bg-stone-800 text-white rounded-xl text-sm font-medium hover:bg-stone-700 transition-colors">Search</button>
                   </div>
+                  {query.trim() && (
+                    <button
+                      onClick={() => handleGenerateRecipe(query.trim())}
+                      disabled={generatingRecipe}
+                      className="w-full mb-2 py-2 rounded-xl bg-green-50 hover:bg-green-100 disabled:opacity-60 text-green-700 text-xs font-medium border border-green-200 transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      {generatingRecipe
+                        ? <><span className="animate-spin inline-block">⏳</span> Generating recipe...</>
+                        : <>✨ Generate "{query.trim()}" with AI</>}
+                    </button>
+                  )}
                   <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none mb-2">
                     {PRESET_SEARCHES.map(p => (
                       <button
@@ -290,19 +380,23 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
                 loading ? (
                   <div className="text-center py-10 text-stone-400 text-sm">Loading...</div>
                 ) : results.length === 0 ? (
-                  <div className="text-center py-10 text-stone-400 text-sm">No results found</div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {results.map(recipe => (
-                      <button key={recipe.id} onClick={() => openDetail(recipe)} className="text-left rounded-2xl overflow-hidden border border-stone-100 hover:border-green-300 hover:shadow-sm transition-all group">
-                        <img src={recipe.thumbnail} alt={recipe.name} className="w-full h-28 object-cover group-hover:scale-105 transition-transform duration-200" />
-                        <div className="p-2.5">
-                          <p className="text-xs font-medium text-stone-700 leading-snug line-clamp-2">{recipe.name}</p>
-                          {recipe.category && <p className="text-xs text-stone-400 mt-0.5">{recipe.category}</p>}
-                        </div>
-                      </button>
-                    ))}
+                  <div className="text-center py-10">
+                    <p className="text-stone-400 text-sm">No results — use the generate button above</p>
                   </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {results.map(recipe => (
+                        <button key={recipe.id} onClick={() => openDetail(recipe)} className="text-left rounded-2xl overflow-hidden border border-stone-100 hover:border-green-300 hover:shadow-sm transition-all group">
+                          <img src={recipe.thumbnail} alt={recipe.name} className="w-full h-28 object-cover group-hover:scale-105 transition-transform duration-200" />
+                          <div className="p-2.5">
+                            <p className="text-xs font-medium text-stone-700 leading-snug line-clamp-2">{recipe.name}</p>
+                            {recipe.category && <p className="text-xs text-stone-400 mt-0.5">{recipe.category}</p>}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </>
                 )
               ) : (
                 loadingCustom ? (

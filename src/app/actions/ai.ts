@@ -3,6 +3,13 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { RecipePrefill } from '@/types'
 
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+
+function extractJSON(text: string): string {
+  const match = text.match(/\{[\s\S]*\}/)
+  return match ? match[0] : text
+}
+
 export async function parseRecipeUrl(url: string): Promise<RecipePrefill> {
   const res = await fetch(url, {
     headers: {
@@ -23,11 +30,11 @@ export async function parseRecipeUrl(url: string): Promise<RecipePrefill> {
       const data = JSON.parse(block[1])
       const items: { '@type'?: string | string[] }[] = Array.isArray(data) ? data : [data, ...((data['@graph'] as []) ?? [])]
       const recipe = items.find(d => d['@type'] === 'Recipe' || (Array.isArray(d['@type']) && d['@type'].includes('Recipe')))
-      if (recipe) { textToSend = `Structured JSON-LD recipe:\n${JSON.stringify(recipe)}`; break }
+      if (recipe) { textToSend = `JSON-LD recipe:\n${JSON.stringify(recipe)}`; break }
     } catch { /* skip malformed JSON */ }
   }
 
-  // Fallback: strip HTML to readable text
+  // Fallback: strip HTML — cap at 6000 chars to limit input tokens
   if (!textToSend) {
     textToSend = html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
@@ -35,17 +42,10 @@ export async function parseRecipeUrl(url: string): Promise<RecipePrefill> {
       .replace(/<[^>]+>/g, ' ')
       .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
       .replace(/&nbsp;/g, ' ').replace(/&#(\d+);/g, (_, c) => String.fromCharCode(parseInt(c)))
-      .replace(/\s+/g, ' ').trim().slice(0, 10000)
+      .replace(/\s+/g, ' ').trim().slice(0, 6000)
   }
 
   return parseRecipeText(textToSend)
-}
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
-  return match ? match[0] : text
 }
 
 export async function generateHealthyVersion(recipe: {
@@ -54,37 +54,26 @@ export async function generateHealthyVersion(recipe: {
   servings?: number
   ingredients: { name: string; measure: string }[]
   instructions?: string
-}): Promise<RecipePrefill> {
+}, dietary?: string[]): Promise<RecipePrefill> {
+  const dietaryNote = dietary?.length
+    ? `\nAlso respect these dietary restrictions: ${dietary.join(', ')}. Adjust ingredients accordingly.`
+    : ''
+
   const message = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 1500,
+    max_tokens: 1000,
     messages: [{
       role: 'user',
-      content: `Create a genuinely healthier version of this recipe by applying smart substitutions:
-- Replace deep frying with baking (400°F/200°C), air frying, or pan frying with 1 tsp olive oil
-- Replace heavy cream with Greek yogurt or light coconut milk
-- Reduce sugar by 25–50%, or replace with honey/maple syrup
-- Use lean protein (chicken breast, lean beef, tofu) instead of fatty cuts
-- Add extra vegetables naturally
-- Use whole wheat or almond flour instead of refined white flour
-- Use olive oil or avocado oil instead of butter/vegetable oil
+      content: `Create a healthier version of this recipe. Substitutions: bake/air-fry instead of deep-fry, Greek yogurt instead of heavy cream, reduce sugar 25-50%, lean protein, extra veg, whole wheat flour, olive oil instead of butter.${dietaryNote}
 
-Original recipe:
 Name: ${recipe.name}
 Category: ${recipe.category}
 Servings: ${recipe.servings ?? 4}
 Ingredients: ${JSON.stringify(recipe.ingredients)}
 Instructions: ${recipe.instructions ?? ''}
 
-Return ONLY valid JSON, no markdown, no explanation:
-{
-  "name": "Healthy ${recipe.name}",
-  "category": "${recipe.category}",
-  "servings": ${recipe.servings ?? 4},
-  "is_healthy": true,
-  "ingredients": [{"name": "string", "measure": "string"}],
-  "instructions": "string"
-}`,
+Return ONLY valid JSON:
+{"name":"Healthy ${recipe.name}","category":"${recipe.category}","servings":${recipe.servings ?? 4},"is_healthy":true,"ingredients":[{"name":"string","measure":"string"}],"instructions":"string"}`,
     }],
   })
 
@@ -92,32 +81,109 @@ Return ONLY valid JSON, no markdown, no explanation:
   return JSON.parse(extractJSON(text)) as RecipePrefill
 }
 
-export async function parseRecipeText(text: string): Promise<RecipePrefill> {
+export async function suggestLocalProducts(
+  ingredients: string[],
+  region: string,
+  supermarkets?: string[],
+  dietary?: string[]
+): Promise<{ index: number; suggestion: string }[]> {
+  const storeClause = supermarkets?.length
+    ? `\nPreferred stores: ${supermarkets.join(', ')}. Prioritize products from these stores when possible.`
+    : ''
+  const dietaryClause = dietary?.length
+    ? `\nDietary restrictions: ${dietary.join(', ')}. Suggest appropriate alternatives if an ingredient conflicts.`
+    : ''
+
   const message = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 1500,
     messages: [{
       role: 'user',
-      content: `Parse this recipe text into structured JSON. Extract:
-- name: the recipe name
-- category: best category guess (Chicken, Beef, Pasta, Salad, Seafood, Vegetarian, Dessert, etc.)
-- servings: number of servings (look for "serves X" or "makes X", default 4 if missing)
-- is_healthy: true if method uses baking/grilling/steaming and uses lean ingredients, false otherwise
-- ingredients: array of {name, measure} where measure is the amount (e.g. "2 cups", "1 tbsp", "3")
-- instructions: complete cooking steps as one string
+      content: `User is near "${region}" and needs to buy these ingredients at a local supermarket. For each one, suggest the most appropriate LOCAL product.${storeClause}${dietaryClause}
 
-Recipe text:
+IMPORTANT rules:
+- Match the EXACT TYPE of product described. "Cooked ham" or "smoked ham" = boiled/deli ham (jamón cocido, turkey ham) — NOT cured ham like serrano, prosciutto, or ibérico.
+- "Fresh" means uncooked. "Smoked" means smoked, not cured/dried.
+- Give a real local brand + store where available. Keep it short (one line).
+- Use the local language name if it differs from English.
+
+${ingredients.map((ing, i) => `${i}: ${ing}`).join('\n')}
+
+Return ONLY a JSON array (0-based index):
+[{"index":0,"suggestion":"local product name (store)"},{"index":1,"suggestion":"..."}]`,
+    }],
+  })
+
+  const text = message.content[0].type === 'text' ? message.content[0].text : '[]'
+  const match = text.match(/\[[\s\S]*\]/)
+  return match ? JSON.parse(match[0]) : []
+}
+
+export async function enrichRecipe(recipe: {
+  name: string
+  ingredients: { name: string; measure: string }[]
+  instructions: string
+  servings?: number
+}): Promise<{ ingredients: { name: string; measure: string }[]; instructions: string }> {
+  const message = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 800,
+    messages: [{
+      role: 'user',
+      content: `Make this recipe's ingredients specific and shopable (e.g. "Sausages"→"pork sausages", "Bacon"→"smoked back bacon", "Mushrooms"→"chestnut mushrooms"). Keep measures unchanged. Rewrite instructions as numbered steps with timing.
+
+Recipe: ${recipe.name}
+Ingredients: ${JSON.stringify(recipe.ingredients)}
+Instructions: ${recipe.instructions}
+
+Return ONLY valid JSON:
+{"ingredients":[{"name":"string","measure":"string"}],"instructions":"1. Step one...\n2. Step two..."}`,
+    }],
+  })
+
+  const text = message.content[0].type === 'text' ? message.content[0].text : '{}'
+  return JSON.parse(extractJSON(text)) as { ingredients: { name: string; measure: string }[]; instructions: string }
+}
+
+export async function generateRecipe(
+  name: string,
+  servings: number,
+  dietary?: string[]
+): Promise<RecipePrefill & { category: string; is_healthy: boolean }> {
+  const dietaryNote = dietary?.length
+    ? `\nDietary requirements: ${dietary.join(', ')}. The recipe MUST comply with all of these restrictions.`
+    : ''
+
+  const message = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1000,
+    messages: [{
+      role: 'user',
+      content: `Write a complete home-cook recipe for "${name}" (serves ${servings}).${dietaryNote}
+Use specific, shopable ingredient names (e.g. "large free-range eggs", "cooked smoked ham", "unsalted butter").
+Instructions as clear numbered steps with timing.
+
+Return ONLY valid JSON:
+{"name":"string","category":"string","servings":${servings},"is_healthy":false,"ingredients":[{"name":"string","measure":"string"}],"instructions":"1. Step...\n2. Step..."}`,
+    }],
+  })
+
+  const text = message.content[0].type === 'text' ? message.content[0].text : '{}'
+  return JSON.parse(extractJSON(text))
+}
+
+export async function parseRecipeText(text: string): Promise<RecipePrefill> {
+  const message = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1200,
+    messages: [{
+      role: 'user',
+      content: `Parse this recipe into JSON. Extract name, category (Chicken/Beef/Pasta/Salad/Seafood/Vegetarian/Dessert/etc), servings (default 4), is_healthy (true if baked/grilled/steamed with lean ingredients), ingredients as [{name,measure}], and instructions as a single string.
+
 ${text}
 
-Return ONLY valid JSON, no markdown, no explanation:
-{
-  "name": "string",
-  "category": "string",
-  "servings": 4,
-  "is_healthy": false,
-  "ingredients": [{"name": "string", "measure": "string"}],
-  "instructions": "string"
-}`,
+Return ONLY valid JSON:
+{"name":"string","category":"string","servings":4,"is_healthy":false,"ingredients":[{"name":"string","measure":"string"}],"instructions":"string"}`,
     }],
   })
 

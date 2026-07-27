@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase'
+import { suggestLocalProducts } from '@/app/actions/ai'
 import { ShoppingItem, Menu } from '@/types'
 import Link from 'next/link'
 
@@ -13,6 +14,46 @@ function getMonday(date: Date): string {
   return d.toISOString().split('T')[0]
 }
 
+const CATEGORIES: { key: string; label: string; icon: string; pattern: RegExp }[] = [
+  {
+    key: 'meat',
+    label: 'Meat & Fish',
+    icon: '🥩',
+    pattern: /beef|pork|chicken|lamb|sausage|bacon|ham|turkey|mince|steak|veal|duck|venison|fish|salmon|tuna|cod|prawn|shrimp|anchov|sardine|mackerel|haddock|lard|chorizo|pancetta|prosciutto|salami/i,
+  },
+  {
+    key: 'produce',
+    label: 'Produce',
+    icon: '🥬',
+    pattern: /tomato|onion|garlic|pepper|carrot|potato|broccoli|spinach|lettuce|mushroom|cucumber|celery|leek|courgette|zucchini|aubergine|eggplant|avocado|lemon|lime|orange|apple|banana|grape|mango|herb|parsley|coriander|cilantro|basil|thyme|rosemary|sage|mint|chive|ginger|chilli|chili|spring onion|scallion|beetroot|asparagus|artichoke|fennel|radish|pea|bean|corn|sweetcorn|cabbage|kale|rocket|arugula|watercress|endive/i,
+  },
+  {
+    key: 'dairy',
+    label: 'Dairy & Eggs',
+    icon: '🥚',
+    pattern: /milk|cream|butter|cheese|yogurt|yoghurt|egg|parmesan|mozzarella|cheddar|feta|brie|ricotta|mascarpone|gouda|halloumi|sour cream|crème fraîche|creme fraiche|ghee/i,
+  },
+  {
+    key: 'grains',
+    label: 'Bakery & Grains',
+    icon: '🍞',
+    pattern: /bread|flour|pasta|rice|oat|cereal|noodle|tortilla|wrap|pita|pitta|cracker|biscuit|pastry|dough|couscous|quinoa|barley|bulgur|polenta|semolina|lasagne|spaghetti|penne|fettuccine/i,
+  },
+  {
+    key: 'pantry',
+    label: 'Pantry & Sauces',
+    icon: '🫙',
+    pattern: /oil|vinegar|sauce|soy|ketchup|mustard|mayo|mayonnaise|spice|salt|pepper|sugar|honey|maple|stock|broth|can|tin|jar|tomato paste|puree|curry paste|tahini|miso|worcestershire|tabasco|hot sauce|balsamic|olive|capers|pickle|jam|marmalade|peanut butter|coconut milk|coconut cream|lentil|chickpea|bean|kidney bean|black bean|dried/i,
+  },
+]
+
+function categorize(ingredientName: string): string {
+  for (const cat of CATEGORIES) {
+    if (cat.pattern.test(ingredientName)) return cat.key
+  }
+  return 'other'
+}
+
 export default function ShoppingPage() {
   const supabase = createClient()
   const [menus, setMenus] = useState<Menu[]>([])
@@ -20,6 +61,13 @@ export default function ShoppingPage() {
   const [items, setItems] = useState<ShoppingItem[]>([])
   const [loading, setLoading] = useState(true)
   const [newItem, setNewItem] = useState('')
+  const [grouping, setGrouping] = useState(true)
+  const [region, setRegion] = useState('')
+  const [supermarkets, setSupermarkets] = useState<string[]>([])
+  const [dietary, setDietary] = useState<string[]>([])
+  const [localSuggestions, setLocalSuggestions] = useState<Map<string, string>>(new Map())
+  const [loadingLocal, setLoadingLocal] = useState(false)
+  const [localError, setLocalError] = useState<string | null>(null)
 
   const loadMenus = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -41,6 +89,29 @@ export default function ShoppingPage() {
   }, [supabase])
 
   useEffect(() => { loadMenus() }, [loadMenus])
+
+  useEffect(() => {
+    const cached = localStorage.getItem('user_region')
+    if (cached) setRegion(cached)
+    try {
+      const s = localStorage.getItem('user_supermarkets')
+      if (s) setSupermarkets(JSON.parse(s))
+      const d = localStorage.getItem('user_dietary')
+      if (d) setDietary(JSON.parse(d))
+    } catch {}
+
+    const onRegion = (e: Event) => setRegion((e as CustomEvent<string>).detail)
+    const onStores = (e: Event) => setSupermarkets((e as CustomEvent<string[]>).detail)
+    const onDietary = (e: Event) => setDietary((e as CustomEvent<string[]>).detail)
+    window.addEventListener('region-changed', onRegion)
+    window.addEventListener('supermarkets-changed', onStores)
+    window.addEventListener('dietary-changed', onDietary)
+    return () => {
+      window.removeEventListener('region-changed', onRegion)
+      window.removeEventListener('supermarkets-changed', onStores)
+      window.removeEventListener('dietary-changed', onDietary)
+    }
+  }, [])
 
   const loadItems = useCallback(async (menuId: string) => {
     const { data } = await supabase
@@ -83,6 +154,45 @@ export default function ShoppingPage() {
     setItems(prev => prev.filter(i => !i.checked))
   }
 
+  async function fetchLocalSuggestions(forceRefresh = false) {
+    if (!region || loadingLocal) return
+    setLocalError(null)
+    const ingredientNames = items.filter(i => !i.checked).map(i => i.ingredient)
+    const fingerprint = ingredientNames.slice().sort().join('|')
+    const cacheKey = `local_sugg_${region}`
+
+    if (!forceRefresh) {
+      try {
+        const cached = localStorage.getItem(cacheKey)
+        if (cached) {
+          const { fp, indexed } = JSON.parse(cached)
+          if (fp === fingerprint) {
+            const map = new Map<string, string>()
+            for (const r of indexed) map.set((ingredientNames[r.index] ?? '').toLowerCase(), r.suggestion)
+            setLocalSuggestions(map)
+            return
+          }
+        }
+      } catch { /* ignore stale cache */ }
+    }
+
+    setLoadingLocal(true)
+    try {
+      const indexed = await suggestLocalProducts(ingredientNames, region, supermarkets, dietary)
+      const map = new Map<string, string>()
+      for (const r of indexed) {
+        const name = ingredientNames[r.index]
+        if (name) map.set(name.toLowerCase(), r.suggestion)
+      }
+      setLocalSuggestions(map)
+      localStorage.setItem(cacheKey, JSON.stringify({ fp: fingerprint, indexed }))
+    } catch {
+      setLocalError('Could not load suggestions — check your connection and try again')
+    } finally {
+      setLoadingLocal(false)
+    }
+  }
+
   const unchecked = items.filter(i => !i.checked)
   const checked = items.filter(i => i.checked)
 
@@ -91,19 +201,98 @@ export default function ShoppingPage() {
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' week'
   }
 
+  // Build grouped structure for unchecked items
+  const grouped = (() => {
+    if (!grouping) return null
+    const map = new Map<string, ShoppingItem[]>()
+    for (const item of unchecked) {
+      const key = categorize(item.ingredient)
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(item)
+    }
+    const result: { key: string; label: string; icon: string; items: ShoppingItem[] }[] = []
+    for (const cat of CATEGORIES) {
+      const catItems = map.get(cat.key)
+      if (catItems?.length) result.push({ ...cat, items: catItems })
+    }
+    const other = map.get('other')
+    if (other?.length) result.push({ key: 'other', label: 'Other', icon: '🛒', items: other })
+    return result
+  })()
+
+  const ShoppingItemRow = ({ item }: { item: ShoppingItem }) => {
+    const suggestion = localSuggestions.get(item.ingredient.toLowerCase())
+    return (
+      <div className="flex items-start gap-3 px-4 py-3">
+        <button
+          onClick={() => toggleItem(item)}
+          className="w-5 h-5 rounded-full border-2 border-stone-200 hover:border-green-500 flex-shrink-0 mt-0.5 transition-colors"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2">
+            <span className="text-sm text-stone-700">{item.ingredient}</span>
+            {item.quantity && (
+              <span className="text-xs text-stone-400">{item.quantity}</span>
+            )}
+          </div>
+          {suggestion && (
+            <p className="text-xs text-blue-600 mt-0.5 leading-snug">📍 {suggestion}</p>
+          )}
+        </div>
+        <button onClick={() => deleteItem(item.id)} className="text-stone-300 hover:text-red-400 text-xs transition-colors mt-0.5">✕</button>
+      </div>
+    )
+  }
+
   return (
     <div className="max-w-lg mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold text-stone-800">Shopping List</h1>
-        {checked.length > 0 && (
-          <button
-            onClick={clearChecked}
-            className="text-xs text-stone-400 hover:text-red-500 transition-colors"
-          >
-            Clear checked
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {unchecked.length > 0 && (
+            <button
+              onClick={() => setGrouping(g => !g)}
+              className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${grouping ? 'bg-green-100 text-green-700' : 'bg-stone-100 text-stone-500'}`}
+            >
+              {grouping ? '⊞ Grouped' : '≡ List'}
+            </button>
+          )}
+          {checked.length > 0 && (
+            <button onClick={clearChecked} className="text-xs text-stone-400 hover:text-red-500 transition-colors">
+              Clear checked
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Local suggestions bar */}
+      {unchecked.length > 0 && (
+        <>
+          <div className="flex items-center justify-between bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3 mb-1">
+            <div className="flex-1 min-w-0">
+              {region ? (
+                <p className="text-xs text-blue-700">
+                  <span className="font-medium">📍 {region}</span>
+                  {localSuggestions.size > 0 && <span className="text-blue-500 ml-1">· {localSuggestions.size} suggestions loaded</span>}
+                </p>
+              ) : (
+                <p className="text-xs text-blue-600">Set your city in the nav bar to get local brand suggestions</p>
+              )}
+            </div>
+            {region && (
+              <button
+                onClick={() => fetchLocalSuggestions(localSuggestions.size > 0)}
+                disabled={loadingLocal}
+                className="flex-shrink-0 ml-3 text-xs font-medium px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg transition-colors"
+              >
+                {loadingLocal ? '⏳ Loading...' : localSuggestions.size > 0 ? '↻ Refresh' : '🌍 Get local suggestions'}
+              </button>
+            )}
+          </div>
+          {localError && <p className="text-xs text-red-500 px-1 mb-4">{localError}</p>}
+          {!localError && <div className="mb-4" />}
+        </>
+      )}
 
       {/* Week selector */}
       {menus.length > 1 && (
@@ -126,63 +315,54 @@ export default function ShoppingPage() {
 
       {loading ? (
         <div className="text-center py-20 text-stone-400 text-sm">Loading...</div>
-      ) : items.length === 0 && !loading ? (
+      ) : items.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-4xl mb-3">🛒</div>
           <p className="text-stone-500 text-sm mb-4">No items yet.</p>
-          <Link
-            href="/dashboard"
-            className="text-sm text-green-600 hover:text-green-700 font-medium"
-          >
+          <Link href="/dashboard" className="text-sm text-green-600 hover:text-green-700 font-medium">
             Go plan your menu →
           </Link>
         </div>
       ) : (
         <>
-          {/* Unchecked items */}
-          <div className="bg-white rounded-2xl border border-stone-100 divide-y divide-stone-50 mb-4">
-            {unchecked.map(item => (
-              <div key={item.id} className="flex items-center gap-3 px-4 py-3">
-                <button
-                  onClick={() => toggleItem(item)}
-                  className="w-5 h-5 rounded-full border-2 border-stone-200 hover:border-green-500 flex-shrink-0 transition-colors"
-                />
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm text-stone-700">{item.ingredient}</span>
-                  {item.quantity && (
-                    <span className="text-xs text-stone-400 ml-2">{item.quantity}</span>
-                  )}
-                </div>
-                <button
-                  onClick={() => deleteItem(item.id)}
-                  className="text-stone-300 hover:text-red-400 text-xs transition-colors"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-
-          {/* Checked items */}
-          {checked.length > 0 && (
-            <div className="bg-stone-50 rounded-2xl border border-stone-100 divide-y divide-stone-100 mb-4 opacity-60">
-              {checked.map(item => (
-                <div key={item.id} className="flex items-center gap-3 px-4 py-3">
-                  <button
-                    onClick={() => toggleItem(item)}
-                    className="w-5 h-5 rounded-full bg-green-500 border-2 border-green-500 flex-shrink-0 flex items-center justify-center"
-                  >
-                    <span className="text-white text-[10px]">✓</span>
-                  </button>
-                  <span className="text-sm text-stone-400 line-through flex-1">{item.ingredient}</span>
-                  <button
-                    onClick={() => deleteItem(item.id)}
-                    className="text-stone-300 hover:text-red-400 text-xs transition-colors"
-                  >
-                    ✕
-                  </button>
+          {grouping && grouped ? (
+            <div className="space-y-4 mb-4">
+              {grouped.map(group => (
+                <div key={group.key}>
+                  <div className="flex items-center gap-2 mb-1.5 px-1">
+                    <span className="text-base">{group.icon}</span>
+                    <h3 className="text-xs font-semibold text-stone-500 uppercase tracking-wide">{group.label}</h3>
+                    <span className="text-xs text-stone-300">({group.items.length})</span>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-stone-100 divide-y divide-stone-50">
+                    {group.items.map(item => <ShoppingItemRow key={item.id} item={item} />)}
+                  </div>
                 </div>
               ))}
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-stone-100 divide-y divide-stone-50 mb-4">
+              {unchecked.map(item => <ShoppingItemRow key={item.id} item={item} />)}
+            </div>
+          )}
+
+          {checked.length > 0 && (
+            <div className="mb-4">
+              <p className="text-xs text-stone-400 px-1 mb-1.5 font-medium">✓ Done ({checked.length})</p>
+              <div className="bg-stone-50 rounded-2xl border border-stone-100 divide-y divide-stone-100 opacity-60">
+                {checked.map(item => (
+                  <div key={item.id} className="flex items-center gap-3 px-4 py-3">
+                    <button
+                      onClick={() => toggleItem(item)}
+                      className="w-5 h-5 rounded-full bg-green-500 border-2 border-green-500 flex-shrink-0 flex items-center justify-center"
+                    >
+                      <span className="text-white text-[10px]">✓</span>
+                    </button>
+                    <span className="text-sm text-stone-400 line-through flex-1">{item.ingredient}</span>
+                    <button onClick={() => deleteItem(item.id)} className="text-stone-300 hover:text-red-400 text-xs transition-colors">✕</button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </>

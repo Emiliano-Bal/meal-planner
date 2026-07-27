@@ -2,10 +2,11 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { logout } from '@/app/actions/auth'
 import { createClient } from '@/lib/supabase'
 import HouseholdSizeModal from '@/components/HouseholdSizeModal'
+import PreferencesModal from '@/components/PreferencesModal'
 
 const links = [
   { href: '/dashboard', label: 'Menu', icon: '📅' },
@@ -18,10 +19,18 @@ export default function Nav() {
   const supabase = createClient()
   const [householdSize, setHouseholdSize] = useState(4)
   const [showModal, setShowModal] = useState(false)
+  const [showPrefs, setShowPrefs] = useState(false)
+  const [region, setRegion] = useState('')
+  const [editingRegion, setEditingRegion] = useState(false)
+  const [regionDraft, setRegionDraft] = useState('')
+  const regionInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const cached = localStorage.getItem('household_size')
     if (cached) setHouseholdSize(parseInt(cached))
+
+    const cachedRegion = localStorage.getItem('user_region')
+    if (cachedRegion) setRegion(cachedRegion)
 
     async function loadFromDB() {
       const { data: { user } } = await supabase.auth.getUser()
@@ -35,11 +44,26 @@ export default function Nav() {
     loadFromDB()
   }, [supabase])
 
+  useEffect(() => {
+    if (editingRegion) {
+      setRegionDraft(region)
+      setTimeout(() => regionInputRef.current?.focus(), 50)
+    }
+  }, [editingRegion, region])
+
   function handleSave(size: number) {
     setHouseholdSize(size)
     localStorage.setItem('household_size', String(size))
     window.dispatchEvent(new CustomEvent('household-size-changed', { detail: size }))
     setShowModal(false)
+  }
+
+  function saveRegion() {
+    const trimmed = regionDraft.trim()
+    setRegion(trimmed)
+    localStorage.setItem('user_region', trimmed)
+    window.dispatchEvent(new CustomEvent('region-changed', { detail: trimmed }))
+    setEditingRegion(false)
   }
 
   return (
@@ -52,6 +76,38 @@ export default function Nav() {
           </Link>
 
           <nav className="flex items-center gap-1">
+            {/* Region button */}
+            {editingRegion ? (
+              <div className="flex items-center gap-1 mr-1">
+                <input
+                  ref={regionInputRef}
+                  value={regionDraft}
+                  onChange={e => setRegionDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') saveRegion(); if (e.key === 'Escape') setEditingRegion(false) }}
+                  placeholder="City or region..."
+                  className="w-36 px-2.5 py-1 text-xs rounded-lg border border-green-300 bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+                <button onClick={saveRegion} className="text-xs bg-green-600 text-white px-2 py-1 rounded-lg hover:bg-green-700 transition-colors">Save</button>
+                <button onClick={() => setEditingRegion(false)} className="text-xs text-stone-400 hover:text-stone-600 px-1.5 py-1 rounded-lg">✕</button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setEditingRegion(true)}
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-500 transition-colors mr-1"
+                title="Set your city for local product suggestions"
+              >
+                📍 {region || 'Set city'}
+              </button>
+            )}
+
+            <button
+              onClick={() => setShowPrefs(true)}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-500 transition-colors mr-1"
+              title="Dietary restrictions & preferred supermarkets"
+            >
+              ⚙️ Prefs
+            </button>
+
             <button
               onClick={() => setShowModal(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-600 transition-colors mr-1"
@@ -96,6 +152,8 @@ export default function Nav() {
           onClose={() => setShowModal(false)}
         />
       )}
+
+      {showPrefs && <PreferencesModal onClose={() => setShowPrefs(false)} />}
     </>
   )
 }
