@@ -2,14 +2,152 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase'
-import { scaleQuantity, normalizeIngKey, sumQuantities } from '@/lib/utils'
+import { scaleQuantity, normalizeIngKey, sumQuantities, isBasicPantryStaple, getCachedTranslations, saveCachedTranslations } from '@/lib/utils'
 import { translateIngredients } from '@/app/actions/ai'
 import { Menu, Meal, RecipeData, MealType } from '@/types'
 import RecipePickerModal from '@/components/RecipePickerModal'
 import QuickIngredientModal from '@/components/QuickIngredientModal'
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner']
+
+// ─── Copy Meal Modal ───────────────────────────────────────────────────────
+
+function CopyMealModal({
+  meal,
+  currentMonday,
+  onCopy,
+  onClose,
+}: {
+  meal: Meal
+  currentMonday: Date
+  onCopy: (source: Meal, weekOffset: number, day: number, type: MealType, section: string) => Promise<void>
+  onClose: () => void
+}) {
+  const [weekOffset, setWeekOffset] = useState(1)
+  const [targetDay, setTargetDay] = useState(0)
+  const [targetType, setTargetType] = useState<MealType>('lunch')
+  const [targetSection, setTargetSection] = useState('main')
+  const [copying, setCopying] = useState(false)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  async function handleCopy() {
+    setCopying(true)
+    const section = targetType === 'lunch' ? targetSection : 'main'
+    await onCopy(meal, weekOffset, targetDay, targetType, section)
+    setCopying(false)
+  }
+
+  const weekLabels = ['This week', 'Next week', '+2 weeks', '+3 weeks']
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+      onClick={onClose}
+    >
+      <div
+        className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl overflow-hidden shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-6 pt-6 pb-5 border-b border-stone-100">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-lg font-bold text-stone-900">Copy meal</p>
+              <p className="text-sm text-stone-400 mt-0.5 truncate">&ldquo;{meal.meal_name}&rdquo;</p>
+            </div>
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 text-stone-400 transition-colors flex-shrink-0">✕</button>
+          </div>
+        </div>
+
+        <div className="px-6 py-5 space-y-5">
+          {/* Week */}
+          <div>
+            <p className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-2">To week</p>
+            <div className="flex gap-2 flex-wrap">
+              {weekLabels.map((label, offset) => (
+                <button
+                  key={offset}
+                  onClick={() => setWeekOffset(offset)}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${weekOffset === offset ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-500 hover:bg-stone-200'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Day */}
+          <div>
+            <p className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-2">Day</p>
+            <div className="flex gap-1.5 flex-wrap">
+              {DAY_SHORT.map((d, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setTargetDay(idx)}
+                  className={`w-10 h-10 rounded-lg text-sm font-medium transition-colors ${targetDay === idx ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-500 hover:bg-stone-200'}`}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Meal type */}
+          <div>
+            <p className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-2">Meal</p>
+            <div className="flex gap-2">
+              {(['breakfast', 'lunch', 'dinner'] as MealType[]).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setTargetType(t)}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium capitalize transition-colors ${targetType === t ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-500 hover:bg-stone-200'}`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Section (lunch only) */}
+          {targetType === 'lunch' && (
+            <div>
+              <p className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-2">Section</p>
+              <div className="flex gap-2">
+                {[['main', 'Main'], ['side', 'Side'], ['veggies', 'Veg'], ['grain', 'Grain']].map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setTargetSection(key)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${targetSection === key ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-500 hover:bg-stone-200'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between px-6 pb-6 pt-2">
+          <button onClick={onClose} className="text-sm text-stone-400 hover:text-stone-700 transition-colors">Cancel</button>
+          <button
+            onClick={handleCopy}
+            disabled={copying}
+            className="inline-flex items-center gap-2 bg-stone-900 text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-stone-700 disabled:opacity-50 transition-colors"
+          >
+            {copying ? <><span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />Copying…</> : 'Copy here →'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 const MEAL_LABEL: Record<MealType, string> = {
   breakfast: 'Morning',
@@ -49,6 +187,7 @@ export default function DashboardPage() {
   const [quickAddState, setQuickAddState] = useState<{ day: number; section: string } | null>(null)
   const [generatingList, setGeneratingList] = useState(false)
   const [householdSize, setHouseholdSize] = useState(4)
+  const [copyModalState, setCopyModalState] = useState<{ meal: Meal } | null>(null)
 
   const weekStart = currentMonday.toISOString().split('T')[0]
 
@@ -120,6 +259,62 @@ export default function DashboardPage() {
     setMeals(prev => prev.filter(m => m.id !== existing.id))
   }
 
+  async function copyMealTo(
+    source: Meal,
+    weekOffset: number,
+    targetDay: number,
+    targetType: MealType,
+    targetSection: string,
+  ) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    const targetMonday = new Date(currentMonday)
+    targetMonday.setDate(targetMonday.getDate() + weekOffset * 7)
+    const targetWeekStart = targetMonday.toISOString().split('T')[0]
+
+    let { data: targetMenu } = await supabase
+      .from('menus').select('id')
+      .eq('user_id', user.id).eq('week_start', targetWeekStart).single()
+
+    if (!targetMenu) {
+      const { data: created } = await supabase
+        .from('menus').insert({ user_id: user.id, week_start: targetWeekStart })
+        .select().single()
+      targetMenu = created
+    }
+    if (!targetMenu) return
+
+    const { data: existing } = await supabase
+      .from('meals').select('id')
+      .eq('menu_id', targetMenu.id)
+      .eq('day_of_week', targetDay)
+      .eq('meal_type', targetType)
+      .eq('section', targetSection)
+      .maybeSingle()
+
+    const payload = {
+      meal_name: source.meal_name,
+      recipe_id: source.recipe_id,
+      recipe_data: source.recipe_data,
+    }
+
+    if (existing) {
+      await supabase.from('meals').update(payload).eq('id', existing.id)
+    } else {
+      await supabase.from('meals').insert({
+        menu_id: targetMenu.id,
+        day_of_week: targetDay,
+        meal_type: targetType,
+        section: targetSection,
+        ...payload,
+      })
+    }
+
+    if (weekOffset === 0) await loadMenu()
+    setCopyModalState(null)
+  }
+
   async function generateShoppingList() {
     if (!menu) return
     setGeneratingList(true)
@@ -132,6 +327,7 @@ export default function DashboardPage() {
         const servings = meal.recipe_data.servings ?? 4
         const scale = householdSize / servings
         for (const ing of meal.recipe_data.ingredients) {
+          if (isBasicPantryStaple(ing.name)) continue
           raw.push({
             name: ing.name,
             quantity: scale !== 1 ? scaleQuantity(ing.measure, scale) : ing.measure,
@@ -140,9 +336,21 @@ export default function DashboardPage() {
       }
     }
 
-    // Translate all names to English in one call, then deduplicate
+    // Translate to English — skip names already cached, skip call if everything is cached
     const names = raw.map(r => r.name)
-    const translated = await translateIngredients(names)
+    const cache = getCachedTranslations()
+    const uncachedNames = names.filter(n => !(n.toLowerCase() in cache))
+    let translated: string[]
+    if (uncachedNames.length === 0) {
+      translated = names.map(n => cache[n.toLowerCase()] ?? n)
+    } else {
+      const results = await translateIngredients(uncachedNames)
+      const updated = { ...cache }
+      uncachedNames.forEach((n, i) => { updated[n.toLowerCase()] = results[i] ?? n })
+      saveCachedTranslations(updated)
+      let idx = 0
+      translated = names.map(n => n.toLowerCase() in cache ? cache[n.toLowerCase()] : (results[idx++] ?? n))
+    }
 
     const map = new Map<string, { name: string; quantities: string[] }>()
     for (let i = 0; i < raw.length; i++) {
@@ -254,6 +462,7 @@ export default function DashboardPage() {
                                   </div>
                                   <div className="opacity-0 group-hover:opacity-100 flex gap-2 mt-0.5 ml-7">
                                     <button onClick={() => isSimple ? setQuickAddState({ day: i, section: sec.key }) : setPickerState({ day: i, mealType: 'lunch', section: sec.key })} className="text-[9px] text-stone-400 hover:text-stone-700 transition-colors">edit</button>
+                                    <button onClick={() => setCopyModalState({ meal: meal! })} className="text-[9px] text-stone-400 hover:text-stone-700 transition-colors">copy</button>
                                     <button onClick={() => clearMeal(i, 'lunch', sec.key)} className="text-[9px] text-stone-400 hover:text-red-500 transition-colors">remove</button>
                                   </div>
                                 </div>
@@ -287,6 +496,7 @@ export default function DashboardPage() {
                             )}
                             <div className="opacity-0 group-hover:opacity-100 flex gap-2 mt-1.5 transition-opacity">
                               <button onClick={() => setPickerState({ day: i, mealType: type, section: 'main' })} className="text-[9px] text-stone-400 hover:text-stone-700 transition-colors">edit</button>
+                              <button onClick={() => setCopyModalState({ meal })} className="text-[9px] text-stone-400 hover:text-stone-700 transition-colors">copy</button>
                               <button onClick={() => clearMeal(i, type, 'main')} className="text-[9px] text-stone-400 hover:text-red-500 transition-colors">remove</button>
                             </div>
                           </div>
@@ -331,6 +541,15 @@ export default function DashboardPage() {
           householdSize={householdSize}
           onSelect={(recipe) => assignRecipe(pickerState.day, pickerState.mealType, pickerState.section, recipe)}
           onClose={() => setPickerState(null)}
+        />
+      )}
+
+      {copyModalState !== null && (
+        <CopyMealModal
+          meal={copyModalState.meal}
+          currentMonday={currentMonday}
+          onCopy={copyMealTo}
+          onClose={() => setCopyModalState(null)}
         />
       )}
 

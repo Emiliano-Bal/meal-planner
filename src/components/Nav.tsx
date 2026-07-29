@@ -10,6 +10,7 @@ import PreferencesModal from '@/components/PreferencesModal'
 
 const links = [
   { href: '/dashboard', label: 'Menu' },
+  { href: '/cook', label: 'Cook' },
   { href: '/shopping', label: 'Shopping' },
   { href: '/recipes', label: 'Recipes' },
 ]

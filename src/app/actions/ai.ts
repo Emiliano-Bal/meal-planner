@@ -12,6 +12,11 @@ function extractJSON(text: string): string {
 
 export async function translateIngredients(names: string[]): Promise<string[]> {
   if (!names.length) return []
+  // Fast path: skip AI call entirely if everything looks English
+  const SPANISH = /\b(pollo|carne|cerdo|res|leche|huevo|tomate|cebolla|ajo|arroz|aceite|queso|mantequilla|harina|frijol|maiz|aguacate|zanahoria|papa|patata|pimiento|lechuga|espinaca|salsa|chorizo|jamon|atun|salmon|camarones)\b/i
+  const needsTranslation = names.some(n => /[^\x00-\x7F]/.test(n) || SPANISH.test(n))
+  if (!needsTranslation) return names
+
   const message = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 1500,
@@ -33,6 +38,26 @@ Return ONLY a JSON array in the exact same order: ["egg","whole milk","tomato"]`
     const result = JSON.parse(cleaned.slice(s, e + 1)) as string[]
     return Array.isArray(result) && result.length === names.length ? result : names
   } catch { return names }
+}
+
+export async function parseRecipeImage(
+  base64: string,
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+): Promise<RecipePrefill> {
+  const message = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1200,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+        { type: 'text', text: `Extract the recipe from this image. If you see an ingredient list and/or instructions, parse them. Return ONLY valid JSON (no markdown, no explanation):
+{"name":"string","category":"string","servings":4,"is_healthy":false,"ingredients":[{"name":"string","measure":"string"}],"instructions":"string"}` },
+      ],
+    }],
+  })
+  const raw = message.content[0].type === 'text' ? message.content[0].text : '{}'
+  return JSON.parse(extractJSON(raw)) as RecipePrefill
 }
 
 export async function parseRecipeUrl(url: string): Promise<RecipePrefill> {
@@ -57,6 +82,19 @@ export async function parseRecipeUrl(url: string): Promise<RecipePrefill> {
       const recipe = items.find(d => d['@type'] === 'Recipe' || (Array.isArray(d['@type']) && d['@type'].includes('Recipe')))
       if (recipe) { textToSend = `JSON-LD recipe:\n${JSON.stringify(recipe)}`; break }
     } catch { /* skip malformed JSON */ }
+  }
+
+  // Instagram: caption lives in og:description (JSON-LD is never a Recipe schema there)
+  if (!textToSend && /instagram\.com/i.test(url)) {
+    const ogMatch =
+      html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)?.[1] ??
+      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i)?.[1]
+    if (ogMatch) {
+      const decoded = ogMatch
+        .replace(/&#(\d+);/g, (_, c) => String.fromCharCode(parseInt(c)))
+        .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+      textToSend = `Instagram caption:\n${decoded}`
+    }
   }
 
   // Fallback: strip HTML — cap at 6000 chars to limit input tokens
