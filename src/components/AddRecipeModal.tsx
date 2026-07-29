@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase'
-import { parseRecipeText, parseRecipeUrl } from '@/app/actions/ai'
+import { parseRecipeText, parseRecipeUrl, parseRecipeImage } from '@/app/actions/ai'
 import { CustomRecipe, RecipePrefill } from '@/types'
 
 interface Props {
@@ -17,13 +17,17 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
   const isEdit = !!editRecipe
   const hasPrefill = isEdit || !!prefill
 
-  const [mode, setMode] = useState<'url' | 'paste' | 'manual'>(hasPrefill ? 'manual' : 'url')
+  const [mode, setMode] = useState<'url' | 'paste' | 'photo' | 'manual'>(hasPrefill ? 'manual' : 'url')
   const [urlInput, setUrlInput] = useState('')
   const [fetchingUrl, setFetchingUrl] = useState(false)
   const [urlError, setUrlError] = useState<string | null>(null)
   const [pasteText, setPasteText] = useState('')
   const [parsing, setParsing] = useState(false)
   const [parseError, setParseError] = useState<string | null>(null)
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [imageError, setImageError] = useState<string | null>(null)
+  const [imageLoading, setImageLoading] = useState(false)
 
   const [name, setName] = useState(editRecipe?.name ?? prefill?.name ?? '')
   const [category, setCategory] = useState(editRecipe?.category ?? prefill?.category ?? '')
@@ -77,6 +81,40 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
       setParseError('Failed to parse the recipe. Try adjusting the format or fill in manually.')
     } finally {
       setParsing(false)
+    }
+  }
+
+  function handleImageFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImageFile(file)
+    setImageError(null)
+    const reader = new FileReader()
+    reader.onload = ev => setImagePreview(ev.target?.result as string)
+    reader.readAsDataURL(file)
+  }
+
+  async function parseImage() {
+    if (!imageFile) { setImageError('Select an image first'); return }
+    setImageLoading(true)
+    setImageError(null)
+    try {
+      const buffer = await imageFile.arrayBuffer()
+      const bytes = new Uint8Array(buffer)
+      let binary = ''
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
+      const base64 = btoa(binary)
+      const type = imageFile.type as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+      const result = await parseRecipeImage(base64, type)
+      if (!result.name && !result.ingredients?.length) {
+        setImageError("Couldn't find a recipe in this image. Try a clearer screenshot or paste the recipe text instead.")
+        return
+      }
+      applyParsed(result)
+    } catch (e) {
+      setImageError(e instanceof Error ? e.message : 'Failed to read the image.')
+    } finally {
+      setImageLoading(false)
     }
   }
 
@@ -148,7 +186,8 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
         {!hasPrefill && (
           <div className="px-5 pt-4 flex-shrink-0">
             <div className="flex gap-1 bg-stone-100 rounded-xl p-1">
-              <button onClick={() => setMode('url')} className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${mode === 'url' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500'}`}>🔗 From URL</button>
+              <button onClick={() => setMode('url')} className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${mode === 'url' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500'}`}>🔗 URL</button>
+              <button onClick={() => setMode('photo')} className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${mode === 'photo' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500'}`}>📷 Photo</button>
               <button onClick={() => setMode('paste')} className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${mode === 'paste' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500'}`}>📋 Paste</button>
               <button onClick={() => setMode('manual')} className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${mode === 'manual' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500'}`}>✍️ Write</button>
             </div>
@@ -197,6 +236,50 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
               {parsing ? <><span className="animate-spin inline-block">⏳</span> Parsing recipe...</> : '✨ Parse with AI'}
             </button>
             <button onClick={() => setMode('manual')} className="w-full text-xs text-stone-400 hover:text-stone-600 py-1 transition-colors">Or fill in manually →</button>
+          </div>
+        )}
+
+        {mode === 'photo' && (
+          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+            <p className="text-xs text-stone-400">
+              Screenshot a recipe from Instagram, TikTok, a photo, or anywhere — Claude will read it and fill in the fields.
+            </p>
+
+            {/* Image preview */}
+            {imagePreview ? (
+              <div className="relative rounded-xl overflow-hidden border border-stone-200 bg-stone-50">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={imagePreview} alt="Recipe preview" className="w-full max-h-64 object-contain" />
+                <button
+                  onClick={() => { setImageFile(null); setImagePreview(null); setImageError(null) }}
+                  className="absolute top-2 right-2 w-7 h-7 bg-white/90 rounded-full flex items-center justify-center text-stone-500 hover:text-stone-800 shadow text-sm"
+                >✕</button>
+              </div>
+            ) : (
+              <label className="flex flex-col items-center justify-center gap-3 border-2 border-dashed border-stone-200 rounded-xl p-8 cursor-pointer hover:border-stone-400 hover:bg-stone-50 transition-colors">
+                <span className="text-3xl">📷</span>
+                <span className="text-sm font-medium text-stone-600">Upload screenshot or take photo</span>
+                <span className="text-xs text-stone-400">JPEG, PNG, or WebP</span>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  capture="environment"
+                  onChange={handleImageFile}
+                  className="sr-only"
+                />
+              </label>
+            )}
+
+            {imageError && <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3.5 py-2.5">{imageError}</p>}
+
+            <button
+              onClick={parseImage}
+              disabled={!imageFile || imageLoading}
+              className="w-full bg-stone-900 hover:bg-stone-800 disabled:bg-stone-300 text-white font-medium py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
+            >
+              {imageLoading ? <><span className="animate-spin inline-block">⏳</span> Reading recipe…</> : '✨ Extract Recipe'}
+            </button>
+            <button onClick={() => setMode('paste')} className="w-full text-xs text-stone-400 hover:text-stone-600 py-1 transition-colors">Or paste the recipe text instead →</button>
           </div>
         )}
 

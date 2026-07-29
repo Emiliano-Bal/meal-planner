@@ -1,3 +1,22 @@
+const TRANS_CACHE_KEY = 'ingredient_translation_cache'
+
+export function getCachedTranslations(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(TRANS_CACHE_KEY) ?? '{}') }
+  catch { return {} }
+}
+
+export function saveCachedTranslations(cache: Record<string, string>) {
+  localStorage.setItem(TRANS_CACHE_KEY, JSON.stringify(cache))
+}
+
+// Ingredients assumed to always be at home — excluded from shopping list
+export function isBasicPantryStaple(name: string): boolean {
+  const n = name.toLowerCase().trim().replace(/\s*\([^)]*\)/g, '').trim()
+  if (/^(water|cold water|warm water|hot water|ice water|boiling water)$/.test(n)) return true
+  if (/\boil$/.test(n)) return true // "olive oil", "vegetable oil", "sesame oil", etc.
+  return false
+}
+
 export function normalizeIngKey(name: string): string {
   let k = name.toLowerCase().trim()
   k = k.replace(/\s*\([^)]*\)/g, '').trim() // remove (parenthetical notes)

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase'
 import { suggestLocalProducts, translateIngredients } from '@/app/actions/ai'
 import { ShoppingItem, Menu } from '@/types'
-import { scaleQuantity, normalizeIngKey, sumQuantities } from '@/lib/utils'
+import { scaleQuantity, normalizeIngKey, sumQuantities, isBasicPantryStaple, getCachedTranslations, saveCachedTranslations } from '@/lib/utils'
 import Link from 'next/link'
 
 function getMonday(date: Date): string {
@@ -180,13 +180,27 @@ export default function ShoppingPage() {
           const servings = meal.recipe_data.servings ?? 4
           const scale = householdSize / servings
           for (const ing of meal.recipe_data.ingredients) {
+            if (isBasicPantryStaple(ing.name)) continue
             raw.push({ name: ing.name, quantity: scale !== 1 ? scaleQuantity(ing.measure, scale) : ing.measure })
           }
         }
       }
       if (!raw.length) return
 
-      const translated = await translateIngredients(raw.map(r => r.name))
+      const names = raw.map(r => r.name)
+      const cache = getCachedTranslations()
+      const uncachedNames = names.filter(n => !(n.toLowerCase() in cache))
+      let translated: string[]
+      if (uncachedNames.length === 0) {
+        translated = names.map(n => cache[n.toLowerCase()] ?? n)
+      } else {
+        const results = await translateIngredients(uncachedNames)
+        const updated = { ...cache }
+        uncachedNames.forEach((n, i) => { updated[n.toLowerCase()] = results[i] ?? n })
+        saveCachedTranslations(updated)
+        let idx = 0
+        translated = names.map(n => n.toLowerCase() in cache ? cache[n.toLowerCase()] : (results[idx++] ?? n))
+      }
       const map = new Map<string, { name: string; quantities: string[] }>()
       for (let i = 0; i < raw.length; i++) {
         const name = translated[i] ?? raw[i].name
