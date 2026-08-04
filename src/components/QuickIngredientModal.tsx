@@ -2,8 +2,11 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { RecipeData } from '@/types'
+import { LangPref } from '@/lib/utils'
 
-const SECTION_CONFIG: Record<string, { label: string; placeholder: string; defaultGrams: number; note: string }> = {
+type SectionCfg = { label: string; placeholder: string; defaultGrams: number; note: string }
+
+const SECTION_CONFIG_EN: Record<string, SectionCfg> = {
   side: {
     label: 'Side Dish',
     placeholder: 'e.g. Roasted potatoes, Coleslaw, Hummus...',
@@ -24,17 +27,40 @@ const SECTION_CONFIG: Record<string, { label: string; placeholder: string; defau
   },
 }
 
+const SECTION_CONFIG_ES: Record<string, SectionCfg> = {
+  side: {
+    label: 'Guarnición',
+    placeholder: 'Ej. Papas asadas, Coleslaw, Hummus...',
+    defaultGrams: 150,
+    note: 'g por persona',
+  },
+  veggies: {
+    label: 'Verduras',
+    placeholder: 'Ej. Brócoli, Ejotes, Zanahorias...',
+    defaultGrams: 150,
+    note: 'g por persona',
+  },
+  grain: {
+    label: 'Grano',
+    placeholder: 'Ej. Arroz integral, Quinoa, Pasta...',
+    defaultGrams: 75,
+    note: 'g por persona (seco)',
+  },
+}
+
 interface Props {
   section: string
   householdSize: number
   dayName: string
+  langPref?: LangPref
   onAdd: (recipe: RecipeData) => void
   onPickRecipe: () => void
   onClose: () => void
 }
 
-export default function QuickIngredientModal({ section, householdSize, dayName, onAdd, onPickRecipe, onClose }: Props) {
-  const cfg = SECTION_CONFIG[section] ?? SECTION_CONFIG.side
+export default function QuickIngredientModal({ section, householdSize, dayName, langPref = 'original', onAdd, onPickRecipe, onClose }: Props) {
+  const configs = langPref === 'es' ? SECTION_CONFIG_ES : SECTION_CONFIG_EN
+  const cfg = configs[section] ?? configs.side
   const [ingredient, setIngredient] = useState('')
   const [gramsPerPerson, setGramsPerPerson] = useState(cfg.defaultGrams)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -42,6 +68,7 @@ export default function QuickIngredientModal({ section, householdSize, dayName, 
   useEffect(() => { inputRef.current?.focus() }, [])
 
   const totalGrams = gramsPerPerson * householdSize
+  const isES = langPref === 'es'
 
   function handleAdd() {
     if (!ingredient.trim()) { inputRef.current?.focus(); return }
@@ -64,7 +91,7 @@ export default function QuickIngredientModal({ section, householdSize, dayName, 
     <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="bg-white w-full sm:max-w-sm rounded-t-3xl sm:rounded-2xl shadow-xl p-5">
         <div className="flex items-center justify-between mb-1">
-          <h2 className="font-semibold text-stone-800">Add {cfg.label}</h2>
+          <h2 className="font-semibold text-stone-800">{isES ? 'Agregar' : 'Add'} {cfg.label}</h2>
           <button onClick={onClose} className="text-stone-400 hover:text-stone-700 w-8 h-8 flex items-center justify-center rounded-lg hover:bg-stone-50 transition-colors">✕</button>
         </div>
         <p className="text-xs text-stone-400 mb-4">{dayName}</p>
@@ -99,7 +126,11 @@ export default function QuickIngredientModal({ section, householdSize, dayName, 
             <p className="text-3xl font-bold text-stone-700 leading-none">
               {totalGrams >= 1000 ? `${(totalGrams / 1000).toFixed(1)}kg` : `${totalGrams}g`}
             </p>
-            <p className="text-xs text-stone-400 mt-1">for {householdSize} {householdSize === 1 ? 'person' : 'people'}</p>
+            <p className="text-xs text-stone-400 mt-1">
+              {isES
+                ? `para ${householdSize} ${householdSize === 1 ? 'persona' : 'personas'}`
+                : `for ${householdSize} ${householdSize === 1 ? 'person' : 'people'}`}
+            </p>
           </div>
         </div>
 
@@ -107,14 +138,14 @@ export default function QuickIngredientModal({ section, householdSize, dayName, 
           onClick={handleAdd}
           className="w-full bg-stone-900 hover:bg-stone-800 text-white font-medium py-3 rounded-xl text-sm transition-colors mb-3"
         >
-          Add to {dayName}
+          {isES ? `Agregar a ${dayName}` : `Add to ${dayName}`}
         </button>
 
         <button
           onClick={onPickRecipe}
           className="w-full text-xs text-stone-400 hover:text-stone-600 py-1 transition-colors"
         >
-          Or pick a full recipe instead →
+          {isES ? 'O elige una receta completa →' : 'Or pick a full recipe instead →'}
         </button>
       </div>
     </div>

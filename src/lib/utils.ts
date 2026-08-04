@@ -1,3 +1,75 @@
+// ─── Language preference ───────────────────────────────────────────────────
+
+export type LangPref = 'original' | 'en' | 'es'
+
+export function getLangPref(): LangPref {
+  try { return (localStorage.getItem('lang_pref') ?? 'original') as LangPref }
+  catch { return 'original' }
+}
+
+export function setLangPref(lang: LangPref) {
+  localStorage.setItem('lang_pref', lang)
+  window.dispatchEvent(new CustomEvent('language-changed', { detail: lang }))
+}
+
+export function getNameTransCache(lang: 'en' | 'es'): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(`recipe_names_${lang}`) ?? '{}') }
+  catch { return {} }
+}
+
+export function setNameTransCache(lang: 'en' | 'es', cache: Record<string, string>) {
+  try { localStorage.setItem(`recipe_names_${lang}`, JSON.stringify(cache)) }
+  catch {}
+}
+
+export function getFullTransCache(lang: 'en' | 'es', id: string): {
+  name: string; category: string
+  ingredients: { name: string; measure: string }[]
+  instructions: string
+} | null {
+  try {
+    const stored = localStorage.getItem(`recipe_full_${lang}_${id}`)
+    return stored ? JSON.parse(stored) : null
+  } catch { return null }
+}
+
+export function setFullTransCache(
+  lang: 'en' | 'es',
+  id: string,
+  data: { name: string; category: string; ingredients: { name: string; measure: string }[]; instructions: string }
+) {
+  try { localStorage.setItem(`recipe_full_${lang}_${id}`, JSON.stringify(data)) }
+  catch {}
+}
+
+// ─── Instructions splitter ─────────────────────────────────────────────────
+
+// Split a recipe instructions string into individual steps.
+// Handles: numbered multi-line ("1. Step\n2. Step"),
+// plain multi-line, and single-block paragraphs from URL/Instagram scrapes.
+export function splitIntoSteps(raw: string): string[] {
+  if (!raw?.trim()) return []
+
+  const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+  if (lines.length > 1) {
+    return lines.map(s => s.replace(/^\d+\.\s*/, '').trim()).filter(Boolean)
+  }
+
+  // Single block — split at ". " before an uppercase letter (covers both
+  // English A-Z and common Spanish accented capitals Á É Í Ó Ú Ü Ñ).
+  // This avoids splitting on abbreviations like "cdas." or "tbsp."
+  const parts = raw
+    .split(/\.\s+(?=[A-ZÁÉÍÓÚÜÑ])/)
+    .map(s => s.trim())
+    .filter(Boolean)
+
+  if (parts.length > 1) {
+    return parts.map((p, i) => (i < parts.length - 1 ? p + '.' : p))
+  }
+
+  return [raw.trim()]
+}
+
 const TRANS_CACHE_KEY = 'ingredient_translation_cache'
 
 export function getCachedTranslations(): Record<string, string> {

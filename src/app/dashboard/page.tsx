@@ -2,14 +2,16 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase'
-import { scaleQuantity, normalizeIngKey, sumQuantities, isBasicPantryStaple, getCachedTranslations, saveCachedTranslations } from '@/lib/utils'
-import { translateIngredients } from '@/app/actions/ai'
+import { scaleQuantity, normalizeIngKey, sumQuantities, isBasicPantryStaple, getCachedTranslations, saveCachedTranslations, getLangPref, LangPref } from '@/lib/utils'
+import { translateIngredients, batchTranslateRecipeNames } from '@/app/actions/ai'
 import { Menu, Meal, RecipeData, MealType } from '@/types'
 import RecipePickerModal from '@/components/RecipePickerModal'
 import QuickIngredientModal from '@/components/QuickIngredientModal'
 
-const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const DAYS_EN = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const DAYS_ES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+const DAY_SHORT_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const DAY_SHORT_ES = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
 const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner']
 
 // ─── Copy Meal Modal ───────────────────────────────────────────────────────
@@ -19,12 +21,15 @@ function CopyMealModal({
   currentMonday,
   onCopy,
   onClose,
+  langPref,
 }: {
   meal: Meal
   currentMonday: Date
   onCopy: (source: Meal, weekOffset: number, day: number, type: MealType, section: string) => Promise<void>
   onClose: () => void
+  langPref: LangPref
 }) {
+  const dayShort = langPref === 'es' ? DAY_SHORT_ES : DAY_SHORT_EN
   const [weekOffset, setWeekOffset] = useState(1)
   const [targetDay, setTargetDay] = useState(0)
   const [targetType, setTargetType] = useState<MealType>('lunch')
@@ -87,7 +92,7 @@ function CopyMealModal({
           <div>
             <p className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-2">Day</p>
             <div className="flex gap-1.5 flex-wrap">
-              {DAY_SHORT.map((d, idx) => (
+              {dayShort.map((d, idx) => (
                 <button
                   key={idx}
                   onClick={() => setTargetDay(idx)}
@@ -149,17 +154,28 @@ function CopyMealModal({
   )
 }
 
-const MEAL_LABEL: Record<MealType, string> = {
+const MEAL_LABEL_EN: Record<MealType, string> = {
   breakfast: 'Morning',
   lunch: 'Midday',
   dinner: 'Evening',
 }
+const MEAL_LABEL_ES: Record<MealType, string> = {
+  breakfast: 'Mañana',
+  lunch: 'Mediodía',
+  dinner: 'Noche',
+}
 
-const LUNCH_SECTIONS = [
-  { key: 'main',    label: 'Main'   },
-  { key: 'side',    label: 'Side'   },
-  { key: 'veggies', label: 'Veg'    },
-  { key: 'grain',   label: 'Grain'  },
+const LUNCH_SECTIONS_EN = [
+  { key: 'main',    label: 'Main'  },
+  { key: 'side',    label: 'Side'  },
+  { key: 'veggies', label: 'Veg'   },
+  { key: 'grain',   label: 'Grain' },
+]
+const LUNCH_SECTIONS_ES = [
+  { key: 'main',    label: 'Plato' },
+  { key: 'side',    label: 'Lado'  },
+  { key: 'veggies', label: 'Veg'   },
+  { key: 'grain',   label: 'Grano' },
 ]
 
 function getMonday(date: Date): Date {
@@ -188,6 +204,13 @@ export default function DashboardPage() {
   const [generatingList, setGeneratingList] = useState(false)
   const [householdSize, setHouseholdSize] = useState(4)
   const [copyModalState, setCopyModalState] = useState<{ meal: Meal } | null>(null)
+  const [langPref, setLangPref] = useState<LangPref>('original')
+  const [translatedMealNames, setTranslatedMealNames] = useState<Record<string, string>>({})
+
+  const isES = langPref === 'es'
+  const localDays = isES ? DAYS_ES : DAYS_EN
+  const localMealLabel = isES ? MEAL_LABEL_ES : MEAL_LABEL_EN
+  const localLunchSections = isES ? LUNCH_SECTIONS_ES : LUNCH_SECTIONS_EN
 
   const weekStart = currentMonday.toISOString().split('T')[0]
 
@@ -203,8 +226,28 @@ export default function DashboardPage() {
     if (cached) setHouseholdSize(parseInt(cached))
     const handler = (e: Event) => setHouseholdSize((e as CustomEvent<number>).detail)
     window.addEventListener('household-size-changed', handler)
-    return () => window.removeEventListener('household-size-changed', handler)
+
+    setLangPref(getLangPref())
+    const langHandler = (e: Event) => setLangPref((e as CustomEvent<LangPref>).detail)
+    window.addEventListener('language-changed', langHandler)
+
+    return () => {
+      window.removeEventListener('household-size-changed', handler)
+      window.removeEventListener('language-changed', langHandler)
+    }
   }, [])
+
+  useEffect(() => {
+    if (langPref === 'original' || meals.length === 0) {
+      setTranslatedMealNames({})
+      return
+    }
+    const unique = Array.from(new Set(meals.map(m => m.meal_name).filter((n): n is string => !!n)))
+    const items = unique.map(name => ({ id: name, name }))
+    batchTranslateRecipeNames(items, langPref).then(map => {
+      setTranslatedMealNames(map)
+    }).catch(() => {})
+  }, [meals, langPref])
 
   const loadMenu = useCallback(async () => {
     setLoading(true)
@@ -405,7 +448,7 @@ export default function DashboardPage() {
               {/* Day header row */}
               <div className="grid grid-cols-[64px_repeat(7,minmax(0,1fr))] border-b-2 border-stone-200">
                 <div className="border-r border-stone-200" /> {/* corner */}
-                {DAYS.map((day, i) => {
+                {localDays.map((day, i) => {
                   const isToday = i === todayIndex
                   const dayDate = new Date(currentMonday)
                   dayDate.setDate(dayDate.getDate() + i)
@@ -431,12 +474,12 @@ export default function DashboardPage() {
                   {/* Row label */}
                   <div className="border-r border-stone-200 p-2.5 flex items-start justify-end pt-3">
                     <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-stone-400 text-right">
-                      {MEAL_LABEL[type]}
+                      {localMealLabel[type]}
                     </span>
                   </div>
 
                   {/* Day cells */}
-                  {DAYS.map((_, i) => {
+                  {localDays.map((_, i) => {
                     const isToday = i === todayIndex
                     const cellBase = `border-r last:border-r-0 border-stone-100 p-2.5 ${isToday ? 'bg-stone-50' : 'bg-white'}`
 
@@ -444,14 +487,15 @@ export default function DashboardPage() {
                       return (
                         <div key={i} className={cellBase}>
                           <div className="space-y-1">
-                            {LUNCH_SECTIONS.map(sec => {
+                            {localLunchSections.map(sec => {
                               const meal = meals.find(m =>
                                 m.day_of_week === i && m.meal_type === 'lunch' && (m.section ?? 'main') === sec.key
                               )
                               const isSimple = sec.key !== 'main'
+                              const baseName = (meal?.meal_name ? (translatedMealNames[meal.meal_name] ?? meal.meal_name) : undefined)
                               const displayName = meal?.recipe_data?.grams_per_person
-                                ? `${meal.recipe_data.name} · ${householdSize * meal.recipe_data.grams_per_person}g`
-                                : meal?.meal_name
+                                ? `${baseName} · ${householdSize * meal.recipe_data.grams_per_person}g`
+                                : baseName
 
                               return meal ? (
                                 <div key={sec.key} className="group">
@@ -490,7 +534,7 @@ export default function DashboardPage() {
                       <div key={i} className={cellBase}>
                         {meal ? (
                           <div className="group h-full">
-                            <p className="text-[11px] text-stone-700 leading-snug">{meal.meal_name}</p>
+                            <p className="text-[11px] text-stone-700 leading-snug">{(meal.meal_name ? (translatedMealNames[meal.meal_name] ?? meal.meal_name) : '')}</p>
                             {meal.recipe_data?.is_healthy && (
                               <span className="text-[9px] text-stone-400 font-medium mt-0.5 block">✦ healthy</span>
                             )}
@@ -535,7 +579,7 @@ export default function DashboardPage() {
 
       {pickerState !== null && (
         <RecipePickerModal
-          dayName={DAYS[pickerState.day]}
+          dayName={localDays[pickerState.day]}
           mealType={pickerState.mealType}
           section={pickerState.section}
           householdSize={householdSize}
@@ -550,6 +594,7 @@ export default function DashboardPage() {
           currentMonday={currentMonday}
           onCopy={copyMealTo}
           onClose={() => setCopyModalState(null)}
+          langPref={langPref}
         />
       )}
 
@@ -557,7 +602,8 @@ export default function DashboardPage() {
         <QuickIngredientModal
           section={quickAddState.section}
           householdSize={householdSize}
-          dayName={DAYS[quickAddState.day]}
+          dayName={localDays[quickAddState.day]}
+          langPref={langPref}
           onAdd={(recipe) => {
             assignRecipe(quickAddState.day, 'lunch', quickAddState.section, recipe)
             setQuickAddState(null)

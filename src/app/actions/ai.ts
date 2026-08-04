@@ -6,8 +6,16 @@ import { RecipePrefill } from '@/types'
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
-  return match ? match[0] : text
+  // Strip markdown code fences (```json ... ``` or ``` ... ```)
+  const stripped = text
+    .replace(/^```(?:json|javascript|js)?\s*/im, '')
+    .replace(/\s*```\s*$/m, '')
+    .trim()
+  const obj = stripped.match(/\{[\s\S]*\}/)
+  if (obj) return obj[0]
+  const arr = stripped.match(/\[[\s\S]*\]/)
+  if (arr) return arr[0]
+  return stripped
 }
 
 export async function translateIngredients(names: string[]): Promise<string[]> {
@@ -51,13 +59,13 @@ export async function parseRecipeImage(
       role: 'user',
       content: [
         { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-        { type: 'text', text: `Extract the recipe from this image. If you see an ingredient list and/or instructions, parse them. Return ONLY valid JSON (no markdown, no explanation):
-{"name":"string","category":"string","servings":4,"is_healthy":false,"ingredients":[{"name":"string","measure":"string"}],"instructions":"string"}` },
+        { type: 'text', text: `Extract the recipe from this image. If you see an ingredient list and/or instructions, parse them. Format instructions as numbered steps separated by \\n. Return ONLY valid JSON (no markdown, no explanation):
+{"name":"string","category":"string","servings":4,"is_healthy":false,"ingredients":[{"name":"string","measure":"string"}],"instructions":"1. First step.\\n2. Second step.\\n3. Third step."}` },
       ],
     }],
   })
   const raw = message.content[0].type === 'text' ? message.content[0].text : '{}'
-  return JSON.parse(extractJSON(raw)) as RecipePrefill
+  try { return JSON.parse(extractJSON(raw)) as RecipePrefill } catch { return {} as RecipePrefill }
 }
 
 export async function parseRecipeUrl(url: string): Promise<RecipePrefill> {
@@ -72,15 +80,28 @@ export async function parseRecipeUrl(url: string): Promise<RecipePrefill> {
 
   const html = await res.text()
 
+  // Extract og:image for thumbnail
+  let ogImage =
+    html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1] ??
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)?.[1] ??
+    ''
+
   // Try JSON-LD structured data first — most recipe sites have it
   let textToSend: string | null = null
   const jsonLdBlocks = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)]
   for (const block of jsonLdBlocks) {
     try {
       const data = JSON.parse(block[1])
-      const items: { '@type'?: string | string[] }[] = Array.isArray(data) ? data : [data, ...((data['@graph'] as []) ?? [])]
+      const items: { '@type'?: string | string[]; image?: unknown }[] = Array.isArray(data) ? data : [data, ...((data['@graph'] as []) ?? [])]
       const recipe = items.find(d => d['@type'] === 'Recipe' || (Array.isArray(d['@type']) && d['@type'].includes('Recipe')))
-      if (recipe) { textToSend = `JSON-LD recipe:\n${JSON.stringify(recipe)}`; break }
+      if (recipe) {
+        textToSend = `JSON-LD recipe:\n${JSON.stringify(recipe)}`
+        // Prefer the JSON-LD image (highest quality)
+        const ldImg = recipe.image
+        const imgUrl = Array.isArray(ldImg) ? ldImg[0] : (typeof ldImg === 'object' && ldImg !== null ? (ldImg as { url?: string }).url : ldImg)
+        if (typeof imgUrl === 'string' && imgUrl) ogImage = imgUrl
+        break
+      }
     } catch { /* skip malformed JSON */ }
   }
 
@@ -108,7 +129,8 @@ export async function parseRecipeUrl(url: string): Promise<RecipePrefill> {
       .replace(/\s+/g, ' ').trim().slice(0, 6000)
   }
 
-  return parseRecipeText(textToSend)
+  const result = await parseRecipeText(textToSend)
+  return ogImage ? { ...result, thumbnail: ogImage } : result
 }
 
 export async function generateHealthyVersion(recipe: {
@@ -141,7 +163,7 @@ Return ONLY valid JSON:
   })
 
   const text = message.content[0].type === 'text' ? message.content[0].text : '{}'
-  return JSON.parse(extractJSON(text)) as RecipePrefill
+  try { return JSON.parse(extractJSON(text)) as RecipePrefill } catch { return {} as RecipePrefill }
 }
 
 export async function suggestLocalProducts(
@@ -212,7 +234,9 @@ Return ONLY valid JSON:
   })
 
   const text = message.content[0].type === 'text' ? message.content[0].text : '{}'
-  return JSON.parse(extractJSON(text)) as { ingredients: { name: string; measure: string }[]; instructions: string }
+  try {
+    return JSON.parse(extractJSON(text)) as { ingredients: { name: string; measure: string }[]; instructions: string }
+  } catch { return { ingredients: recipe.ingredients, instructions: recipe.instructions } }
 }
 
 export async function generateRecipe(
@@ -239,7 +263,110 @@ Return ONLY valid JSON:
   })
 
   const text = message.content[0].type === 'text' ? message.content[0].text : '{}'
-  return JSON.parse(extractJSON(text))
+  try { return JSON.parse(extractJSON(text)) } catch { return { category: '', is_healthy: false } }
+}
+
+// Shared helper: extract a JSON array from raw AI text (handles code fences)
+function extractArray(raw: string): string[] | null {
+  const s = raw.indexOf('[')
+  const e = raw.lastIndexOf(']')
+  if (s === -1 || e === -1 || e <= s) return null
+  try {
+    const parsed = JSON.parse(raw.slice(s, e + 1))
+    return Array.isArray(parsed) ? parsed as string[] : null
+  } catch { return null }
+}
+
+export async function batchTranslateStrings(
+  items: string[],
+  targetLang: 'en' | 'es'
+): Promise<string[]> {
+  if (!items.length) return []
+  const langName = targetLang === 'en' ? 'English' : 'Spanish'
+  const message = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1200,
+    messages: [{
+      role: 'user',
+      content: `Translate each item in this JSON array to ${langName}. Keep the EXACT same order and count. If an item is already in ${langName}, keep it unchanged.
+
+Input: ${JSON.stringify(items)}
+
+Reply with ONLY a JSON array of ${items.length} translated strings, nothing else.`,
+    }],
+  })
+  const raw = message.content[0].type === 'text' ? message.content[0].text : '[]'
+  const result = extractArray(raw)
+  // Map element-by-element; fall back to original for any missing slots
+  return items.map((item, i) => (result && result[i]) ? String(result[i]) : item)
+}
+
+export async function batchTranslateRecipeNames(
+  recipes: { id: string; name: string }[],
+  targetLang: 'en' | 'es'
+): Promise<Record<string, string>> {
+  if (!recipes.length) return {}
+  const langName = targetLang === 'en' ? 'English' : 'Spanish'
+  const names = recipes.map(r => r.name)
+  const message = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1000,
+    messages: [{
+      role: 'user',
+      content: `Translate each recipe name in this JSON array to ${langName}. Keep the EXACT same order and count. If a name is already in ${langName}, keep it unchanged.
+
+Input: ${JSON.stringify(names)}
+
+Reply with ONLY a JSON array of ${recipes.length} translated strings, nothing else.`,
+    }],
+  })
+  const raw = message.content[0].type === 'text' ? message.content[0].text : '[]'
+  const translations = extractArray(raw)
+  const result: Record<string, string> = {}
+  recipes.forEach((r, i) => {
+    result[r.id] = (translations && translations[i]) ? String(translations[i]) : r.name
+  })
+  return result
+}
+
+export async function translateRecipe(
+  recipe: {
+    name: string
+    category?: string
+    ingredients: { name: string; measure: string }[]
+    instructions: string
+  },
+  targetLang: 'en' | 'es'
+): Promise<{ name: string; category: string; ingredients: { name: string; measure: string }[]; instructions: string }> {
+  const langName = targetLang === 'en' ? 'English' : 'Spanish'
+  const message = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1500,
+    messages: [{
+      role: 'user',
+      content: `Translate this recipe to ${langName}. Keep ingredient measures/amounts exactly as-is (only translate the ingredient names). Format instructions as numbered steps separated by \\n.
+
+Name: ${recipe.name}
+Category: ${recipe.category ?? ''}
+Ingredients: ${JSON.stringify(recipe.ingredients)}
+Instructions: ${recipe.instructions}
+
+Return ONLY valid JSON:
+{"name":"string","category":"string","ingredients":[{"name":"string","measure":"string"}],"instructions":"1. Step.\\n2. Step.\\n3. Step."}`,
+    }],
+  })
+  const raw = message.content[0].type === 'text' ? message.content[0].text : '{}'
+  try {
+    return JSON.parse(extractJSON(raw))
+  } catch {
+    // Return original content if AI response is unparseable
+    return {
+      name: recipe.name,
+      category: recipe.category ?? '',
+      ingredients: recipe.ingredients,
+      instructions: recipe.instructions,
+    }
+  }
 }
 
 export async function parseRecipeText(text: string): Promise<RecipePrefill> {
@@ -248,15 +375,15 @@ export async function parseRecipeText(text: string): Promise<RecipePrefill> {
     max_tokens: 1200,
     messages: [{
       role: 'user',
-      content: `Parse this recipe into JSON. Extract name, category (Chicken/Beef/Pasta/Salad/Seafood/Vegetarian/Dessert/etc), servings (default 4), is_healthy (true if baked/grilled/steamed with lean ingredients), ingredients as [{name,measure}], and instructions as a single string.
+      content: `Parse this recipe into JSON. Extract name, category (Chicken/Beef/Pasta/Salad/Seafood/Vegetarian/Dessert/etc), servings (default 4), is_healthy (true if baked/grilled/steamed with lean ingredients), ingredients as [{name,measure}], and instructions formatted as numbered steps separated by \\n (one step per line).
 
 ${text}
 
 Return ONLY valid JSON:
-{"name":"string","category":"string","servings":4,"is_healthy":false,"ingredients":[{"name":"string","measure":"string"}],"instructions":"string"}`,
+{"name":"string","category":"string","servings":4,"is_healthy":false,"ingredients":[{"name":"string","measure":"string"}],"instructions":"1. First step.\\n2. Second step.\\n3. Third step."}`,
     }],
   })
 
   const raw = message.content[0].type === 'text' ? message.content[0].text : '{}'
-  return JSON.parse(extractJSON(raw)) as RecipePrefill
+  try { return JSON.parse(extractJSON(raw)) as RecipePrefill } catch { return {} as RecipePrefill }
 }
