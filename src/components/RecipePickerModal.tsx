@@ -1,12 +1,20 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { searchRecipes, getCategories, filterByCategory, getRecipeById, getFeaturedRecipes } from '@/lib/mealdb'
 import { createClient } from '@/lib/supabase'
-import { scaleQuantity } from '@/lib/utils'
-import { generateHealthyVersion, enrichRecipe, generateRecipe } from '@/app/actions/ai'
+import {
+  scaleQuantity, splitIntoSteps,
+  getLangPref, type LangPref,
+  getNameTransCache, setNameTransCache,
+  getFullTransCache, setFullTransCache,
+} from '@/lib/utils'
+import {
+  generateHealthyVersion, enrichRecipe, generateRecipe,
+  translateRecipe, batchTranslateRecipeNames,
+} from '@/app/actions/ai'
 import { RecipeData, MealType, CustomRecipe, RecipePrefill } from '@/types'
 import AddRecipeModal from '@/components/AddRecipeModal'
+import RecipeThumb from '@/components/RecipeThumb'
 
 const MEAL_TYPE_LABELS: Record<MealType, string> = {
   breakfast: 'Breakfast',
@@ -21,31 +29,11 @@ const SECTION_LABELS: Record<string, string> = {
   grain: 'Grain',
 }
 
-const PRESET_SEARCHES: { label: string; q?: string; cat?: string }[] = [
-  { label: '🍳 Breakfast', cat: 'Breakfast' },
-  { label: '🥩 Steak', q: 'steak' },
-  { label: '🐟 Salmon', q: 'salmon' },
-  { label: '🍝 Pasta', q: 'pasta' },
-  { label: '🍛 Curry', q: 'curry' },
-  { label: '🥗 Salad', q: 'salad' },
-  { label: '🍄 Risotto', q: 'risotto' },
-  { label: '🌮 Tacos', q: 'tacos' },
-]
-
-interface Props {
-  dayName: string
-  mealType: MealType
-  section?: string
-  onSelect: (recipe: RecipeData) => void
-  onClose: () => void
-  householdSize?: number
-}
-
 function customToRecipeData(r: CustomRecipe): RecipeData {
   return {
     id: `custom_${r.id}`,
     name: r.name,
-    thumbnail: '',
+    thumbnail: r.thumbnail ?? '',
     category: r.category ?? 'Custom',
     area: '',
     instructions: r.instructions ?? '',
@@ -62,29 +50,53 @@ function findHealthyAlts(recipeName: string, customs: CustomRecipe[]): CustomRec
   return customs.filter(r => r.is_healthy && words.some(w => r.name.toLowerCase().includes(w)))
 }
 
+interface Props {
+  dayName: string
+  mealType: MealType
+  section?: string
+  onSelect: (recipe: RecipeData) => void
+  onClose: () => void
+  householdSize?: number
+}
+
 export default function RecipePickerModal({ dayName, mealType, section, onSelect, onClose, householdSize = 4 }: Props) {
   const supabase = createClient()
-  const [tab, setTab] = useState<'discover' | 'mine'>('discover')
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<RecipeData[]>([])
-  const [categories, setCategories] = useState<string[]>([])
-  const [activeCategory, setActiveCategory] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [detail, setDetail] = useState<RecipeData | null>(null)
   const [customRecipes, setCustomRecipes] = useState<CustomRecipe[]>([])
   const [loadingCustom, setLoadingCustom] = useState(false)
   const [healthyOnly, setHealthyOnly] = useState(false)
+  const [detail, setDetail] = useState<RecipeData | null>(null)
+  const [generatingRecipe, setGeneratingRecipe] = useState(false)
+  const [savedToLibrary, setSavedToLibrary] = useState(false)
   const [generatingHealthy, setGeneratingHealthy] = useState(false)
   const [healthyPrefill, setHealthyPrefill] = useState<RecipePrefill | null>(null)
   const [enriching, setEnriching] = useState(false)
-  const [generatingRecipe, setGeneratingRecipe] = useState(false)
   const [dietary, setDietary] = useState<string[]>([])
-  const [savedToLibrary, setSavedToLibrary] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
 
+  // Global language preference
+  const [langPref, setLangPrefState] = useState<LangPref>('original')
+  // Translated recipe names for the grid
+  const [translatedNames, setTranslatedNames] = useState<Record<string, string>>({})
+  // Full translation for the detail view
+  const [translatedData, setTranslatedData] = useState<{
+    name: string; category: string
+    ingredients: { name: string; measure: string }[]
+    instructions: string
+  } | null>(null)
+  const [translating, setTranslating] = useState(false)
+  const [translateLang, setTranslateLang] = useState<'en' | 'es' | null>(null)
+
+  // Sync with global language preference
   useEffect(() => {
-    getCategories().then(setCategories)
-    setLoading(true)
-    getFeaturedRecipes().then(r => { setResults(r); setLoading(false) })
+    setLangPrefState(getLangPref())
+    const handler = (e: Event) => setLangPrefState((e as CustomEvent<LangPref>).detail)
+    window.addEventListener('language-changed', handler)
+    return () => window.removeEventListener('language-changed', handler)
+  }, [])
+
+  // Sync dietary
+  useEffect(() => {
     try {
       const d = localStorage.getItem('user_dietary')
       if (d) setDietary(JSON.parse(d))
@@ -109,34 +121,75 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
 
   useEffect(() => { loadCustomRecipes() }, [loadCustomRecipes])
 
-  const search = useCallback(async (q: string) => {
-    if (!q.trim()) return
-    setLoading(true)
-    setActiveCategory(null)
-    setResults(await searchRecipes(q))
-    setLoading(false)
-  }, [])
-
-  const browseCategory = useCallback(async (cat: string) => {
-    setLoading(true)
-    setActiveCategory(cat)
-    setQuery('')
-    setResults(await filterByCategory(cat))
-    setLoading(false)
-  }, [])
-
-  async function openDetail(recipe: RecipeData) {
-    if (recipe.source === 'custom') {
-      setDetail(recipe)
+  // Batch-translate recipe names for the grid whenever recipes or lang change
+  useEffect(() => {
+    if (langPref === 'original' || !customRecipes.length) {
+      setTranslatedNames({})
       return
     }
-    const full = recipe.instructions ? recipe : (await getRecipeById(recipe.id) ?? recipe)
-    setDetail(full)
-    // Check localStorage cache — apply instantly if available, no API call
+    const lang = langPref as 'en' | 'es'
+    const cache = getNameTransCache(lang)
+    const uncached = customRecipes.filter(r => !(r.id in cache))
+    if (uncached.length === 0) { setTranslatedNames(cache); return }
+
+    batchTranslateRecipeNames(uncached.map(r => ({ id: r.id, name: r.name })), lang)
+      .then(newNames => {
+        const updated = { ...cache, ...newNames }
+        setTranslatedNames(updated)
+        setNameTransCache(lang, updated)
+      })
+      .catch(() => setTranslatedNames(cache))
+  }, [customRecipes, langPref])
+
+  // Auto-translate detail when it opens and lang is set
+  useEffect(() => {
+    if (!detail) { setTranslatedData(null); setTranslateLang(null); return }
+    if (langPref === 'original') { setTranslatedData(null); setTranslateLang(null); return }
+
+    const lang = langPref as 'en' | 'es'
+    const cached = getFullTransCache(lang, detail.id)
+    if (cached) { setTranslatedData(cached); setTranslateLang(lang); return }
+
+    let cancelled = false
+    setTranslating(true)
+    translateRecipe({
+      name: detail.name, category: detail.category,
+      ingredients: detail.ingredients, instructions: detail.instructions,
+    }, lang)
+      .then(result => {
+        if (cancelled) return
+        setTranslatedData(result)
+        setTranslateLang(lang)
+        setFullTransCache(lang, detail.id, result)
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setTranslating(false) })
+
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.id, langPref])
+
+  const filteredRecipes = customRecipes.filter(r => {
+    if (healthyOnly && !r.is_healthy) return false
+    if (query.trim() && !r.name.toLowerCase().includes(query.toLowerCase())) return false
+    return true
+  })
+
+  async function manualTranslate(lang: 'en' | 'es') {
+    if (!detail || translating) return
+    if (translateLang === lang && translatedData) return
+    const cached = getFullTransCache(lang, detail.id)
+    if (cached) { setTranslatedData(cached); setTranslateLang(lang); return }
+    setTranslating(true)
     try {
-      const cached = localStorage.getItem(`enriched_${recipe.id}`)
-      if (cached) setDetail(prev => prev ? { ...prev, ...JSON.parse(cached) } : prev)
-    } catch { /* ignore */ }
+      const result = await translateRecipe({
+        name: detail.name, category: detail.category,
+        ingredients: detail.ingredients, instructions: detail.instructions,
+      }, lang)
+      setTranslatedData(result)
+      setTranslateLang(lang)
+      setFullTransCache(lang, detail.id, result)
+    } catch {} finally { setTranslating(false) }
   }
 
   async function handleEnrich() {
@@ -144,16 +197,12 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
     setEnriching(true)
     try {
       const enriched = await enrichRecipe({
-        name: detail.name,
-        ingredients: detail.ingredients,
-        instructions: detail.instructions,
-        servings: detail.servings,
+        name: detail.name, ingredients: detail.ingredients,
+        instructions: detail.instructions, servings: detail.servings,
       })
       setDetail(prev => prev ? { ...prev, ...enriched } : prev)
-      localStorage.setItem(`enriched_${detail.id}`, JSON.stringify(enriched))
-    } catch { /* silently fall back */ } finally {
-      setEnriching(false)
-    }
+      setTranslatedData(null); setTranslateLang(null)
+    } catch {} finally { setEnriching(false) }
   }
 
   async function handleCreateHealthy() {
@@ -161,25 +210,18 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
     setGeneratingHealthy(true)
     try {
       const result = await generateHealthyVersion({
-        name: detail.name,
-        category: detail.category,
+        name: detail.name, category: detail.category,
         servings: detail.servings ?? householdSize,
-        ingredients: detail.ingredients,
-        instructions: detail.instructions,
+        ingredients: detail.ingredients, instructions: detail.instructions,
       }, dietary)
       setHealthyPrefill({ ...result, servings: householdSize })
     } catch {
       setHealthyPrefill({
-        name: `Healthy ${detail.name}`,
-        category: detail.category,
-        servings: householdSize,
-        is_healthy: true,
-        ingredients: detail.ingredients,
-        instructions: detail.instructions || undefined,
+        name: `Healthy ${detail.name}`, category: detail.category,
+        servings: householdSize, is_healthy: true,
+        ingredients: detail.ingredients, instructions: detail.instructions || undefined,
       })
-    } finally {
-      setGeneratingHealthy(false)
-    }
+    } finally { setGeneratingHealthy(false) }
   }
 
   async function handleGenerateRecipe(name: string) {
@@ -187,161 +229,156 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
     setSavedToLibrary(false)
     try {
       const result = await generateRecipe(name, householdSize, dietary)
-
       const recipeName = result.name ?? name
       const payload = {
-        name: recipeName,
-        category: result.category ?? 'Custom',
+        name: recipeName, category: result.category ?? 'Custom',
         servings: result.servings ?? householdSize,
         is_healthy: result.is_healthy ?? false,
         instructions: result.instructions ?? '',
         ingredients: result.ingredients ?? [],
       }
-
-      // Save to database so the recipe persists
       let recipeId = `ai_${Date.now()}`
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
         const { data: saved } = await supabase
-          .from('custom_recipes')
-          .insert({ user_id: user.id, ...payload })
-          .select()
-          .single()
-        if (saved) {
-          recipeId = `custom_${saved.id}`
-          setCustomRecipes(prev => [saved, ...prev])
-          setSavedToLibrary(true)
-        }
+          .from('custom_recipes').insert({ user_id: user.id, ...payload }).select().single()
+        if (saved) { recipeId = `custom_${saved.id}`; setCustomRecipes(prev => [saved, ...prev]); setSavedToLibrary(true) }
       }
-
-      setDetail({
-        id: recipeId,
-        thumbnail: '',
-        area: '',
-        source: 'custom',
-        ...payload,
-      })
-    } finally {
-      setGeneratingRecipe(false)
-    }
+      setDetail({ id: recipeId, thumbnail: '', area: '', source: 'custom', ...payload })
+    } finally { setGeneratingRecipe(false) }
   }
 
-  const filteredCustom = healthyOnly ? customRecipes.filter(r => r.is_healthy) : customRecipes
-  const healthyAlts = detail && detail.source !== 'custom' ? findHealthyAlts(detail.name, customRecipes) : []
+  const healthyAlts = detail ? findHealthyAlts(detail.name, customRecipes) : []
   const scale = detail ? householdSize / (detail.servings ?? 4) : 1
 
-  // Header label for the picker
-  const mealLabel = mealType === 'lunch' && section
-    ? `Lunch · ${SECTION_LABELS[section] ?? section}`
-    : MEAL_TYPE_LABELS[mealType]
+  const displayName = translatedData?.name ?? detail?.name ?? ''
+  const displayIngredients = translatedData?.ingredients ?? detail?.ingredients ?? []
+  const displayInstructions = translatedData?.instructions ?? detail?.instructions ?? ''
 
-  // "Add to" button label
+  const mealLabel = mealType === 'lunch' && section
+    ? `Lunch · ${SECTION_LABELS[section] ?? section}` : MEAL_TYPE_LABELS[mealType]
   const addLabel = mealType === 'lunch' && section
-    ? `Add ${SECTION_LABELS[section] ?? section} to ${dayName}`
-    : `Add ${MEAL_TYPE_LABELS[mealType]} to ${dayName}`
+    ? `Add ${SECTION_LABELS[section] ?? section} to ${dayName}` : `Add ${MEAL_TYPE_LABELS[mealType]} to ${dayName}`
 
   return (
     <>
     <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="bg-white w-full sm:max-w-2xl rounded-t-3xl sm:rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
+
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-stone-100 flex-shrink-0">
           <div>
             <h2 className="font-semibold text-stone-800">{mealLabel}</h2>
             <p className="text-xs text-stone-400 mt-0.5">{dayName}</p>
           </div>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-700 w-8 h-8 flex items-center justify-center rounded-lg hover:bg-stone-50 transition-colors">✕</button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowImportModal(true)} className="text-xs font-medium text-stone-600 hover:text-stone-800 px-3 py-1.5 rounded-lg hover:bg-stone-50 border border-stone-200 transition-colors">
+              + Import
+            </button>
+            <button onClick={onClose} className="text-stone-400 hover:text-stone-700 w-8 h-8 flex items-center justify-center rounded-lg hover:bg-stone-50 transition-colors">✕</button>
+          </div>
         </div>
 
+        {/* Detail view */}
         {detail ? (
           <div className="flex-1 overflow-y-auto p-5">
             <div className="flex items-center justify-between mb-4">
-              <button onClick={() => { setDetail(null); setSavedToLibrary(false) }} className="text-sm text-stone-400 hover:text-stone-700 flex items-center gap-1">← Back</button>
-              {savedToLibrary && (
-                <span className="text-xs text-stone-500 font-medium">✓ Saved to My Recipes</span>
-              )}
+              <button onClick={() => { setDetail(null); setSavedToLibrary(false) }} className="text-sm text-stone-400 hover:text-stone-700 flex items-center gap-1">
+                ← Back
+              </button>
+              {savedToLibrary && <span className="text-xs text-stone-500 font-medium">✓ Saved to My Recipes</span>}
             </div>
-            {detail.thumbnail ? (
-              <img src={detail.thumbnail} alt={detail.name} className="w-full h-48 object-cover rounded-2xl mb-4" />
-            ) : (
-              <div className="w-full h-20 bg-stone-100 rounded-2xl mb-4" />
-            )}
-            <div className="flex items-center gap-2 mb-1">
-              <h3 className="text-lg font-semibold text-stone-800">{detail.name}</h3>
-              {detail.is_healthy && <span className="text-xs bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full font-medium flex-shrink-0">✦ Healthy</span>}
+
+            <div className="rounded-2xl overflow-hidden mb-4">
+              <RecipeThumb thumbnail={detail.thumbnail} category={detail.category} name={detail.name} height="h-48" />
+            </div>
+
+            <div className="flex items-start justify-between gap-2 mb-1">
+              <h3 className="text-lg font-semibold text-stone-800 leading-snug">{displayName}</h3>
+              {detail.is_healthy && <span className="text-xs bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full font-medium flex-shrink-0 mt-1">✦ Healthy</span>}
             </div>
             <p className="text-xs text-stone-400 mb-3">
-              {detail.category}{detail.area ? ` · ${detail.area}` : ''}{detail.servings ? ` · Serves ${detail.servings}` : ''}
+              {detail.category}{detail.servings ? ` · Serves ${detail.servings}` : ''}
             </p>
 
-            {detail.source !== 'custom' && (
+            {/* Language toggle */}
+            <div className="flex items-center gap-1 mb-4 p-1 bg-stone-50 rounded-xl w-fit border border-stone-100">
               <button
-                onClick={handleEnrich}
-                disabled={enriching}
-                className="w-full mb-4 py-2 rounded-xl border border-dashed border-stone-200 text-stone-400 text-xs font-medium hover:border-stone-300 hover:text-stone-700 hover:bg-stone-50 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
+                onClick={() => { setTranslatedData(null); setTranslateLang(null) }}
+                className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${!translateLang ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-400 hover:text-stone-600'}`}
               >
-                {enriching
-                  ? <><span className="animate-spin inline-block">⏳</span> Enhancing...</>
-                  : '✨ Enhance ingredients & steps'}
+                Original
               </button>
-            )}
+              <button
+                onClick={() => manualTranslate('en')}
+                className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${translateLang === 'en' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-400 hover:text-stone-600'}`}
+              >
+                {translating && translateLang !== 'es' ? '...' : 'English'}
+              </button>
+              <button
+                onClick={() => manualTranslate('es')}
+                className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${translateLang === 'es' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-400 hover:text-stone-600'}`}
+              >
+                {translating && translateLang !== 'en' ? '...' : 'Español'}
+              </button>
+            </div>
+
+            <button
+              onClick={handleEnrich}
+              disabled={enriching}
+              className="w-full mb-4 py-2 rounded-xl border border-dashed border-stone-200 text-stone-400 text-xs font-medium hover:border-stone-300 hover:text-stone-700 hover:bg-stone-50 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
+            >
+              {enriching ? <><span className="animate-spin inline-block">⏳</span> Enhancing...</> : '✨ Enhance ingredients & steps'}
+            </button>
 
             <div className="flex items-center justify-between mb-2">
               <h4 className="text-sm font-medium text-stone-700">Ingredients</h4>
-              <div className="flex items-center gap-2">
-                {scale !== 1 && <span className="text-xs text-stone-700 font-medium bg-stone-50 px-2 py-0.5 rounded-full">Scaled for {householdSize} people</span>}
-              </div>
+              {scale !== 1 && <span className="text-xs text-stone-700 font-medium bg-stone-50 px-2 py-0.5 rounded-full">Scaled for {householdSize} people</span>}
             </div>
             <ul className="grid grid-cols-2 gap-1 mb-4">
-              {detail.ingredients.map((ing, i) => (
+              {displayIngredients.map((ing, i) => (
                 <li key={i} className="text-xs text-stone-600 bg-stone-50 rounded-lg px-3 py-1.5">
                   <span className="font-medium">{scaleQuantity(ing.measure, scale)}</span> {ing.name}
                 </li>
               ))}
             </ul>
 
-            {detail.instructions && (
+            {displayInstructions && (
               <>
                 <h4 className="text-sm font-medium text-stone-700 mb-2">Instructions</h4>
                 <ol className="space-y-2 mb-4">
-                  {detail.instructions
-                    .split(/\r?\n|\d+\.\s+/)
-                    .map(s => s.trim())
-                    .filter(Boolean)
-                    .map((step, i) => (
-                      <li key={i} className="flex gap-2.5 text-xs text-stone-600 leading-relaxed">
-                        <span className="flex-shrink-0 w-5 h-5 bg-stone-100 text-stone-700 rounded-full flex items-center justify-center font-semibold text-[10px]">{i + 1}</span>
-                        <span className="flex-1 pt-0.5">{step}</span>
-                      </li>
-                    ))}
+                  {splitIntoSteps(displayInstructions).map((step, i) => (
+                    <li key={i} className="flex gap-2.5 text-xs text-stone-600 leading-relaxed">
+                      <span className="flex-shrink-0 w-5 h-5 bg-stone-100 text-stone-700 rounded-full flex items-center justify-center font-semibold text-[10px]">{i + 1}</span>
+                      <span className="flex-1 pt-0.5">{step}</span>
+                    </li>
+                  ))}
                 </ol>
               </>
             )}
 
-            {detail.source !== 'custom' && (
-              <div className="mb-4">
-                {healthyAlts.length > 0 && (
-                  <>
-                    <h4 className="text-sm font-medium text-stone-700 mb-2">🌿 Your Healthy Versions</h4>
-                    <div className="space-y-2 mb-3">
-                      {healthyAlts.map(alt => (
-                        <button key={alt.id} onClick={() => setDetail(customToRecipeData(alt))} className="w-full text-left px-3.5 py-2.5 rounded-xl border border-stone-100 bg-stone-50 hover:border-stone-300 hover:bg-stone-100 transition-colors">
-                          <p className="text-sm font-medium text-stone-800">{alt.name}</p>
-                          <p className="text-xs text-stone-700 mt-0.5">Serves {alt.servings} · {alt.category ?? 'Custom'}</p>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-                <button
-                  onClick={handleCreateHealthy}
-                  disabled={generatingHealthy}
-                  className="w-full py-2.5 rounded-xl border border-dashed border-stone-300 text-stone-700 text-sm font-medium hover:bg-stone-50 disabled:opacity-60 transition-colors flex items-center justify-center gap-1.5"
-                >
-                  {generatingHealthy ? <><span className="animate-spin inline-block">⏳</span> Generating...</> : '🌿 Create Healthy Version with AI'}
-                </button>
-              </div>
-            )}
+            <div className="mb-4">
+              {healthyAlts.length > 0 && (
+                <>
+                  <h4 className="text-sm font-medium text-stone-700 mb-2">🌿 Your Healthy Versions</h4>
+                  <div className="space-y-2 mb-3">
+                    {healthyAlts.map(alt => (
+                      <button key={alt.id} onClick={() => setDetail(customToRecipeData(alt))} className="w-full text-left px-3.5 py-2.5 rounded-xl border border-stone-100 bg-stone-50 hover:border-stone-300 hover:bg-stone-100 transition-colors">
+                        <p className="text-sm font-medium text-stone-800">{alt.name}</p>
+                        <p className="text-xs text-stone-700 mt-0.5">Serves {alt.servings} · {alt.category ?? 'Custom'}</p>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              <button
+                onClick={handleCreateHealthy}
+                disabled={generatingHealthy}
+                className="w-full py-2.5 rounded-xl border border-dashed border-stone-300 text-stone-700 text-sm font-medium hover:bg-stone-50 disabled:opacity-60 transition-colors flex items-center justify-center gap-1.5"
+              >
+                {generatingHealthy ? <><span className="animate-spin inline-block">⏳</span> Generating...</> : '🌿 Create Healthy Version with AI'}
+              </button>
+            </div>
 
             <button onClick={() => onSelect(detail)} className="w-full bg-stone-900 hover:bg-stone-800 text-white font-medium py-3 rounded-xl text-sm transition-colors">
               {addLabel}
@@ -349,107 +386,70 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
           </div>
         ) : (
           <>
-            <div className="p-4 border-b border-stone-100 flex-shrink-0">
-              <div className="flex gap-1 mb-3 bg-stone-100 rounded-xl p-1">
-                <button onClick={() => setTab('discover')} className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${tab === 'discover' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500'}`}>Discover</button>
-                <button onClick={() => setTab('mine')} className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${tab === 'mine' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500'}`}>My Recipes</button>
+            <div className="p-4 border-b border-stone-100 flex-shrink-0 space-y-2">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  placeholder="Search your recipes..."
+                  className="flex-1 px-3.5 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent"
+                />
+                <button
+                  onClick={() => setHealthyOnly(h => !h)}
+                  title={healthyOnly ? 'Show all' : 'Healthy only'}
+                  className={`px-3 py-2 rounded-xl text-xs font-medium transition-colors border ${healthyOnly ? 'bg-stone-900 text-white border-stone-900' : 'bg-stone-50 text-stone-500 border-stone-200 hover:border-stone-300'}`}
+                >
+                  🌿
+                </button>
               </div>
-
-              {tab === 'discover' ? (
-                <>
-                  <div className="flex gap-2 mb-2">
-                    <input
-                      type="text"
-                      value={query}
-                      onChange={e => setQuery(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && search(query)}
-                      placeholder="Search recipes..."
-                      className="flex-1 px-3.5 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent"
-                    />
-                    <button onClick={() => search(query)} className="px-4 py-2 bg-stone-800 text-white rounded-xl text-sm font-medium hover:bg-stone-700 transition-colors">Search</button>
-                  </div>
-                  {query.trim() && (
-                    <button
-                      onClick={() => handleGenerateRecipe(query.trim())}
-                      disabled={generatingRecipe}
-                      className="w-full mb-2 py-2 rounded-xl bg-stone-50 hover:bg-stone-100 disabled:opacity-60 text-stone-700 text-xs font-medium border border-stone-200 transition-colors flex items-center justify-center gap-1.5"
-                    >
-                      {generatingRecipe
-                        ? <><span className="animate-spin inline-block">⏳</span> Generating recipe...</>
-                        : <>✨ Generate "{query.trim()}" with AI</>}
-                    </button>
-                  )}
-                  <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none mb-2">
-                    {PRESET_SEARCHES.map(p => (
-                      <button
-                        key={p.label}
-                        onClick={() => p.cat ? browseCategory(p.cat) : (p.q && (setQuery(p.q), search(p.q)))}
-                        className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full font-medium bg-stone-50 text-stone-600 border border-stone-200 hover:border-stone-300 hover:text-stone-700 hover:bg-stone-50 transition-colors"
-                      >
-                        {p.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-                    {categories.slice(0, 14).map(cat => (
-                      <button key={cat} onClick={() => browseCategory(cat)} className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${activeCategory === cat ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}>{cat}</button>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <button onClick={() => setHealthyOnly(h => !h)} className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${healthyOnly ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}>🌿 Healthy only</button>
+              {query.trim() && (
+                <button
+                  onClick={() => handleGenerateRecipe(query.trim())}
+                  disabled={generatingRecipe}
+                  className="w-full py-2 rounded-xl bg-stone-50 hover:bg-stone-100 disabled:opacity-60 text-stone-700 text-xs font-medium border border-stone-200 transition-colors flex items-center justify-center gap-1.5"
+                >
+                  {generatingRecipe
+                    ? <><span className="animate-spin inline-block">⏳</span> Generating recipe...</>
+                    : <>✨ Generate &ldquo;{query.trim()}&rdquo; with AI</>}
+                </button>
               )}
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
-              {tab === 'discover' ? (
-                loading ? (
-                  <div className="text-center py-10 text-stone-400 text-sm">Loading...</div>
-                ) : results.length === 0 ? (
-                  <div className="text-center py-10">
-                    <p className="text-stone-400 text-sm">No results — use the generate button above</p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      {results.map(recipe => (
-                        <button key={recipe.id} onClick={() => openDetail(recipe)} className="text-left rounded-2xl overflow-hidden border border-stone-100 hover:border-stone-300 hover:shadow-sm transition-all group">
-                          <img src={recipe.thumbnail} alt={recipe.name} className="w-full h-28 object-cover group-hover:scale-105 transition-transform duration-200" />
-                          <div className="p-2.5">
-                            <p className="text-xs font-medium text-stone-700 leading-snug line-clamp-2">{recipe.name}</p>
-                            {recipe.category && <p className="text-xs text-stone-400 mt-0.5">{recipe.category}</p>}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )
+              {loadingCustom ? (
+                <div className="text-center py-10 text-stone-400 text-sm">Loading...</div>
+              ) : filteredRecipes.length === 0 ? (
+                <div className="text-center py-10">
+                  {customRecipes.length === 0 ? (
+                    <>
+                      <p className="text-2xl mb-3">📝</p>
+                      <p className="text-stone-400 text-sm mb-3">No recipes yet</p>
+                      <button onClick={() => setShowImportModal(true)} className="text-sm font-medium text-stone-700 hover:text-stone-900 underline underline-offset-2">Import your first recipe →</button>
+                    </>
+                  ) : (
+                    <p className="text-stone-400 text-sm">No match — try the generate button above</p>
+                  )}
+                </div>
               ) : (
-                loadingCustom ? (
-                  <div className="text-center py-10 text-stone-400 text-sm">Loading...</div>
-                ) : filteredCustom.length === 0 ? (
-                  <div className="text-center py-10">
-                    <p className="text-stone-400 text-sm mb-1">{healthyOnly ? 'No healthy recipes yet' : 'No custom recipes yet'}</p>
-                    <p className="text-stone-300 text-xs">Go to Recipes → My Recipes to add your own</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {filteredCustom.map(recipe => (
-                      <button key={recipe.id} onClick={() => openDetail(customToRecipeData(recipe))} className="text-left rounded-2xl overflow-hidden border border-stone-100 hover:border-stone-300 hover:shadow-sm transition-all">
-                        <div className="w-full h-28 bg-stone-100 flex items-center justify-center">
-                          <span className="text-3xl">{recipe.is_healthy ? '🥦' : '🍽️'}</span>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {filteredRecipes.map(recipe => (
+                    <button key={recipe.id} onClick={() => setDetail(customToRecipeData(recipe))} className="text-left rounded-2xl overflow-hidden border border-stone-100 hover:border-stone-300 hover:shadow-sm transition-all group">
+                      <div className="overflow-hidden">
+                        <RecipeThumb thumbnail={recipe.thumbnail} category={recipe.category} name={recipe.name} height="h-28" className="group-hover:scale-105 transition-transform duration-200" />
+                      </div>
+                      <div className="p-2.5">
+                        <p className="text-xs font-medium text-stone-700 leading-snug line-clamp-2">
+                          {translatedNames[recipe.id] ?? recipe.name}
+                        </p>
+                        <div className="flex items-center justify-between mt-0.5">
+                          {recipe.category && <p className="text-xs text-stone-400">{recipe.category}</p>}
+                          {recipe.is_healthy && <span className="text-stone-400 text-xs">🌿</span>}
                         </div>
-                        <div className="p-2.5">
-                          <div className="flex items-start gap-1">
-                            <p className="text-xs font-medium text-stone-700 leading-snug line-clamp-2 flex-1">{recipe.name}</p>
-                            {recipe.is_healthy && <span className="text-stone-500 text-xs flex-shrink-0">🌿</span>}
-                          </div>
-                          {recipe.category && <p className="text-xs text-stone-400 mt-0.5">{recipe.category}</p>}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )
+                      </div>
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
           </>
@@ -462,6 +462,13 @@ export default function RecipePickerModal({ dayName, mealType, section, onSelect
         prefill={healthyPrefill}
         onSave={(recipe) => { setCustomRecipes(prev => [recipe, ...prev]); setHealthyPrefill(null) }}
         onClose={() => setHealthyPrefill(null)}
+      />
+    )}
+
+    {showImportModal && (
+      <AddRecipeModal
+        onSave={(recipe) => { setCustomRecipes(prev => [recipe, ...prev]); setShowImportModal(false) }}
+        onClose={() => setShowImportModal(false)}
       />
     )}
     </>

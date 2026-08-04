@@ -13,7 +13,7 @@ Plan your week, generate recipes, and build a smart shopping list — all in one
 - Copy any meal to any day or any week with a single click
 
 **Recipe Library**
-- Browse thousands of recipes from MealDB by category or keyword
+- Your personal recipe library — add via URL, photo, paste, or manual entry
 - Save your own custom recipes
 - Enhance any recipe with AI: make ingredients more specific and shopable
 - Generate a healthy version of any recipe with one click
@@ -97,7 +97,7 @@ Open [http://localhost:3000](http://localhost:3000).
 Create an account, then use the top nav to set your **household size** (this scales ingredient quantities throughout the app) and your **region** (city or area, used for local shopping suggestions).
 
 **2. Plan your week**
-Go to **Menu**. Use the week arrows to pick a week, then tap any empty cell to add a meal. Search the MealDB recipe library, browse your saved recipes, or add a custom one on the spot.
+Go to **Menu**. Use the week arrows to pick a week, then tap any empty cell to add a meal. Pick from your saved recipes, or generate a new one on the spot with AI.
 
 **3. Add recipes from anywhere**
 From the Recipes page or the picker modal, click **Add Recipe** to import from:

@@ -4,7 +4,12 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase'
 import { Meal, MealType, RecipeData } from '@/types'
 import Link from 'next/link'
-import { generateRecipe } from '@/app/actions/ai'
+import { generateRecipe, translateRecipe } from '@/app/actions/ai'
+import {
+  splitIntoSteps,
+  getLangPref, type LangPref,
+  getFullTransCache, setFullTransCache,
+} from '@/lib/utils'
 
 const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner']
 const MEAL_LABEL: Record<MealType, string> = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner' }
@@ -52,23 +57,70 @@ function getRecipe(meal: Meal, localRecipes: Record<string, RecipeData>): Recipe
 function RecipeCard({
   meal,
   localRecipes,
+  langPref,
   onOpenGenerator,
 }: {
   meal: Meal
   localRecipes: Record<string, RecipeData>
+  langPref: LangPref
   onOpenGenerator: (meal: Meal) => void
 }) {
   const [flipped, setFlipped] = useState(false)
+  const [translatedData, setTranslatedData] = useState<{
+    name: string; category: string
+    ingredients: { name: string; measure: string }[]
+    instructions: string
+  } | null>(null)
+  const [translating, setTranslating] = useState(false)
+
   const recipe = getRecipe(meal, localRecipes)
   const hasRecipe = !!(recipe?.instructions || recipe?.ingredients?.length)
   const sectionLabel = meal.section && meal.section !== 'main'
     ? SECTION_LABEL[meal.section] ?? meal.section
     : null
 
+  // Auto-translate when flipped and a language is set
+  useEffect(() => {
+    if (!flipped || !recipe || langPref === 'original') {
+      setTranslatedData(null)
+      return
+    }
+    const lang = langPref as 'en' | 'es'
+    const recipeId = `cook_${meal.id}`
+    const cached = getFullTransCache(lang, recipeId)
+    if (cached) { setTranslatedData(cached); return }
+
+    let cancelled = false
+    setTranslating(true)
+    translateRecipe({
+      name: recipe.name,
+      category: recipe.category,
+      ingredients: recipe.ingredients,
+      instructions: recipe.instructions,
+    }, lang)
+      .then(result => {
+        if (cancelled) return
+        setTranslatedData(result)
+        setFullTransCache(lang, recipeId, result)
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setTranslating(false) })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flipped, langPref, meal.id])
+
+  // Reset translation when lang changes while already flipped
+  useEffect(() => {
+    if (langPref === 'original') setTranslatedData(null)
+  }, [langPref])
+
   function handleFrontClick() {
     if (hasRecipe) setFlipped(true)
     else onOpenGenerator(meal)
   }
+
+  const displayIngredients = translatedData?.ingredients ?? recipe?.ingredients ?? []
+  const displayInstructions = translatedData?.instructions ?? recipe?.instructions ?? ''
 
   return (
     <div
@@ -127,23 +179,26 @@ function RecipeCard({
             transform: 'rotateY(180deg)',
           }}
         >
-          {/* Sticky header with flip-back button */}
+          {/* Sticky header */}
           <div className="sticky top-0 bg-stone-900 border-b border-stone-800 px-5 py-3 flex items-center justify-between z-10">
             <p className="text-sm font-bold text-stone-200 truncate pr-3">{meal.meal_name}</p>
-            <button
-              onClick={e => { e.stopPropagation(); setFlipped(false) }}
-              className="flex-shrink-0 text-xs text-stone-500 hover:text-stone-300 flex items-center gap-1 transition-colors"
-            >
-              ↩ flip back
-            </button>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {translating && <span className="text-xs text-stone-500 animate-pulse">translating…</span>}
+              <button
+                onClick={e => { e.stopPropagation(); setFlipped(false) }}
+                className="text-xs text-stone-500 hover:text-stone-300 flex items-center gap-1 transition-colors"
+              >
+                ↩ flip back
+              </button>
+            </div>
           </div>
 
           <div className="px-5 py-4 space-y-5">
-            {recipe?.ingredients && recipe.ingredients.length > 0 && (
+            {displayIngredients.length > 0 && (
               <div>
                 <p className="text-[10px] font-bold text-stone-500 uppercase tracking-widest mb-3">Ingredients</p>
                 <div className="space-y-2">
-                  {recipe.ingredients.map((ing, i) => (
+                  {displayIngredients.map((ing, i) => (
                     <div key={i} className="flex items-baseline justify-between gap-4 border-b border-stone-800 pb-1.5">
                       <span className="text-sm text-stone-200">{ing.name}</span>
                       {ing.measure && <span className="text-xs text-stone-500 text-right flex-shrink-0">{ing.measure}</span>}
@@ -153,10 +208,17 @@ function RecipeCard({
               </div>
             )}
 
-            {recipe?.instructions && (
+            {displayInstructions && (
               <div className="pb-2">
                 <p className="text-[10px] font-bold text-stone-500 uppercase tracking-widest mb-3">Instructions</p>
-                <p className="text-sm text-stone-300 leading-relaxed whitespace-pre-line">{recipe.instructions}</p>
+                <ol className="space-y-3">
+                  {splitIntoSteps(displayInstructions).map((step, i) => (
+                    <li key={i} className="flex gap-2.5 text-sm text-stone-300 leading-relaxed">
+                      <span className="flex-shrink-0 w-5 h-5 bg-stone-800 text-stone-400 rounded-full flex items-center justify-center font-semibold text-[10px] mt-0.5">{i + 1}</span>
+                      <span className="flex-1">{step}</span>
+                    </li>
+                  ))}
+                </ol>
               </div>
             )}
           </div>
@@ -388,6 +450,14 @@ export default function CookPage() {
   const [loading, setLoading] = useState(true)
   const [generatorMeal, setGeneratorMeal] = useState<Meal | null>(null)
   const [localRecipes, setLocalRecipes] = useState<Record<string, RecipeData>>({})
+  const [langPref, setLangPrefState] = useState<LangPref>('original')
+
+  useEffect(() => {
+    setLangPrefState(getLangPref())
+    const handler = (e: Event) => setLangPrefState((e as CustomEvent<LangPref>).detail)
+    window.addEventListener('language-changed', handler)
+    return () => window.removeEventListener('language-changed', handler)
+  }, [])
 
   const weekStart = getMonday(currentDate).toISOString().split('T')[0]
 
@@ -487,6 +557,7 @@ export default function CookPage() {
                         key={meal.id}
                         meal={meal}
                         localRecipes={localRecipes}
+                        langPref={langPref}
                         onOpenGenerator={setGeneratorMeal}
                       />
                     ))}

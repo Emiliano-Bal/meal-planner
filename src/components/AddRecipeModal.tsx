@@ -29,6 +29,7 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
   const [imageError, setImageError] = useState<string | null>(null)
   const [imageLoading, setImageLoading] = useState(false)
 
+  const [thumbnail, setThumbnail] = useState(editRecipe?.thumbnail ?? prefill?.thumbnail ?? '')
   const [name, setName] = useState(editRecipe?.name ?? prefill?.name ?? '')
   const [category, setCategory] = useState(editRecipe?.category ?? prefill?.category ?? '')
   const [servings, setServings] = useState(editRecipe?.servings ?? prefill?.servings ?? 4)
@@ -43,6 +44,7 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
   const [error, setError] = useState<string | null>(null)
 
   function applyParsed(result: RecipePrefill) {
+    if (result.thumbnail) setThumbnail(result.thumbnail)
     if (result.name) setName(result.name)
     if (result.category) setCategory(result.category)
     if (result.servings) setServings(result.servings)
@@ -148,6 +150,7 @@ export default function AddRecipeModal({ onSave, onClose, prefill, editRecipe }:
       is_healthy: isHealthy,
       instructions: instructions.trim() || null,
       ingredients: validIngredients,
+      thumbnail: thumbnail.trim() || null,
     }
 
     if (isEdit) {

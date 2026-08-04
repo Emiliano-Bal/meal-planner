@@ -7,6 +7,7 @@ import { logout } from '@/app/actions/auth'
 import { createClient } from '@/lib/supabase'
 import HouseholdSizeModal from '@/components/HouseholdSizeModal'
 import PreferencesModal from '@/components/PreferencesModal'
+import { getLangPref, setLangPref, type LangPref } from '@/lib/utils'
 
 const links = [
   { href: '/dashboard', label: 'Menu' },
@@ -21,10 +22,18 @@ export default function Nav() {
   const [householdSize, setHouseholdSize] = useState(4)
   const [showModal, setShowModal] = useState(false)
   const [showPrefs, setShowPrefs] = useState(false)
+  const [langPref, setLangPrefState] = useState<LangPref>('original')
   const [region, setRegion] = useState('')
   const [editingRegion, setEditingRegion] = useState(false)
   const [regionDraft, setRegionDraft] = useState('')
   const regionInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    setLangPrefState(getLangPref())
+    const handler = (e: Event) => setLangPrefState((e as CustomEvent<LangPref>).detail)
+    window.addEventListener('language-changed', handler)
+    return () => window.removeEventListener('language-changed', handler)
+  }, [])
 
   useEffect(() => {
     const cached = localStorage.getItem('household_size')
@@ -51,6 +60,12 @@ export default function Nav() {
       setTimeout(() => regionInputRef.current?.focus(), 50)
     }
   }, [editingRegion, region])
+
+  function toggleLang(lang: 'en' | 'es') {
+    const next: LangPref = langPref === lang ? 'original' : lang
+    setLangPrefState(next)
+    setLangPref(next)
+  }
 
   function handleSave(size: number) {
     setHouseholdSize(size)
@@ -79,6 +94,24 @@ export default function Nav() {
           </Link>
 
           <nav className="flex items-center gap-1">
+            {/* Language toggle */}
+            <div className="flex items-center rounded-lg overflow-hidden border border-stone-200 mr-1 text-[11px] font-semibold">
+              <button
+                onClick={() => toggleLang('en')}
+                title="Show recipes in English"
+                className={`px-2 py-1.5 transition-colors ${langPref === 'en' ? 'bg-stone-900 text-white' : 'text-stone-400 hover:text-stone-700 bg-white hover:bg-stone-50'}`}
+              >
+                EN
+              </button>
+              <button
+                onClick={() => toggleLang('es')}
+                title="Mostrar recetas en Español"
+                className={`px-2 py-1.5 border-l border-stone-200 transition-colors ${langPref === 'es' ? 'bg-stone-900 text-white' : 'text-stone-400 hover:text-stone-700 bg-white hover:bg-stone-50'}`}
+              >
+                ES
+              </button>
+            </div>
+
             {/* Region button */}
             {editingRegion ? (
               <div className="flex items-center gap-1 mr-1">

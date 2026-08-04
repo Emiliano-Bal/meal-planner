@@ -44,7 +44,7 @@ export interface RecipeData {
   ingredients: { name: string; measure: string }[]
   is_healthy?: boolean
   servings?: number
-  source?: 'mealdb' | 'custom'
+  source?: 'mealdb' | 'spoonacular' | 'custom'
   grams_per_person?: number
 }
 
@@ -69,6 +69,7 @@ export interface RecipePrefill {
   is_healthy?: boolean
   ingredients?: { name: string; measure: string }[]
   instructions?: string
+  thumbnail?: string
 }
 
 export interface MealDBRecipe {

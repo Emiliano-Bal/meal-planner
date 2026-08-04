@@ -2,9 +2,9 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase'
-import { suggestLocalProducts, translateIngredients } from '@/app/actions/ai'
+import { suggestLocalProducts, translateIngredients, batchTranslateStrings } from '@/app/actions/ai'
 import { ShoppingItem, Menu } from '@/types'
-import { scaleQuantity, normalizeIngKey, sumQuantities, isBasicPantryStaple, getCachedTranslations, saveCachedTranslations } from '@/lib/utils'
+import { scaleQuantity, normalizeIngKey, sumQuantities, isBasicPantryStaple, getCachedTranslations, saveCachedTranslations, getLangPref, type LangPref } from '@/lib/utils'
 import Link from 'next/link'
 
 function getMonday(date: Date): string {
@@ -71,6 +71,9 @@ export default function ShoppingPage() {
   const [localSuggestions, setLocalSuggestions] = useState<Map<string, string>>(new Map())
   const [loadingLocal, setLoadingLocal] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
+  const [langPref, setLangPrefState] = useState<LangPref>('original')
+  const [translatedIngNames, setTranslatedIngNames] = useState<Map<string, string>>(new Map())
+  const [translatingShop, setTranslatingShop] = useState(false)
 
   const loadMenus = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -123,6 +126,32 @@ export default function ShoppingPage() {
       window.removeEventListener('dietary-changed', onDietary)
     }
   }, [])
+
+  // Global language preference
+  useEffect(() => {
+    setLangPrefState(getLangPref())
+    const handler = (e: Event) => setLangPrefState((e as CustomEvent<LangPref>).detail)
+    window.addEventListener('language-changed', handler)
+    return () => window.removeEventListener('language-changed', handler)
+  }, [])
+
+  // Translate ingredient names when language or items change
+  useEffect(() => {
+    if (langPref !== 'es' || !items.length) {
+      setTranslatedIngNames(new Map())
+      return
+    }
+    const names = items.map(i => i.ingredient)
+    setTranslatingShop(true)
+    batchTranslateStrings(names, 'es')
+      .then(translated => {
+        const map = new Map<string, string>()
+        names.forEach((n, i) => { if (translated[i] && translated[i] !== n) map.set(n, translated[i]) })
+        setTranslatedIngNames(map)
+      })
+      .catch(err => { console.error('[Translation] shopping list failed:', err) })
+      .finally(() => setTranslatingShop(false))
+  }, [items, langPref])
 
   const loadItems = useCallback(async (menuId: string) => {
     const { data } = await supabase
@@ -301,6 +330,7 @@ export default function ShoppingPage() {
 
   const ShoppingItemRow = ({ item }: { item: ShoppingItem }) => {
     const suggestion = localSuggestions.get(item.ingredient.toLowerCase())
+    const displayName = translatedIngNames.get(item.ingredient) ?? item.ingredient
     return (
       <div className="flex items-start gap-3 px-4 py-3">
         <button
@@ -309,7 +339,7 @@ export default function ShoppingPage() {
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2">
-            <span className="text-sm text-stone-700">{item.ingredient}</span>
+            <span className="text-sm text-stone-700">{displayName}</span>
             {item.quantity && (
               <span className="text-xs text-stone-400">{item.quantity}</span>
             )}
@@ -326,7 +356,15 @@ export default function ShoppingPage() {
   return (
     <div className="max-w-lg mx-auto">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold text-stone-800">Shopping List</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-semibold text-stone-800">Shopping List</h1>
+          {translatingShop && (
+            <span className="flex items-center gap-1.5 text-xs text-stone-400">
+              <span className="w-3 h-3 rounded-full border-2 border-stone-300 border-t-stone-600 animate-spin inline-block" />
+              Translating…
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {unchecked.length > 0 && (
             <button
